@@ -1,0 +1,10 @@
+{
+  "description": "Planifica cursos, horarios y salones por semestre, con flujos de aprobación para coordinadores y directores y consultas personalizadas para catedráticos.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
