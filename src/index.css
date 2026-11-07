@@ -229,12 +229,6 @@
   border-color: #2563eb;
   color: #2563eb;
 }
-.prototype-note {
-  display: block;
-  color: #94a3b8;
-  font-size: 10px;
-  margin-top: 18px;
-}
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -1668,10 +1662,6 @@ td b {
   color: #142d4e;
   background: #f7f9fb;
 }
-.prototype-note {
-  text-align: center;
-}
-
 /* Application shell */
 .sidebar {
   width: 232px;

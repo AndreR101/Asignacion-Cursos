@@ -1,5 +1,6 @@
-import { FormEvent, Fragment, ReactNode, useMemo, useState } from "react";
+import { FormEvent, Fragment, ReactNode, useEffect, useMemo, useState } from "react";
 import umgLogo from "./assets/umg-logo.jpg";
+import { api, apiJson } from "./api";
 
 type Role = "director" | "coordinator" | "teacher";
 type Page =
@@ -34,6 +35,10 @@ type Assignment = {
   id: number;
   courseId: number;
   teacherId: number;
+  sectionId?: number;
+  roomId?: number;
+  periodId?: number;
+  cycleId?: number;
   cycle: number;
   section: string;
   room: string;
@@ -43,6 +48,7 @@ type Assignment = {
 };
 type Plan = {
   id: number;
+  periodId?: number;
   year: number;
   semester: string;
   sent: string;
@@ -467,19 +473,24 @@ function Modal({
   );
 }
 
-function Login({ onLogin }: { onLogin: (role: Role) => void }) {
+type ApiUser = { id_usuario: number; nombre_completo: string; correo: string; rol: string };
+
+function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    const entry = (Object.entries(users) as [Role, typeof users.director][]).find(
-      ([, u]) => u.email === email.trim().toLowerCase(),
-    );
-    if (!entry || password !== "Demo123")
-      return setError("El correo o la contraseña no son correctos. Inténtelo nuevamente.");
-    onLogin(entry[0]);
+    try {
+      const result = await api<{ user: ApiUser }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ correo: email.trim(), password }),
+      });
+      onLogin(result.user);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo iniciar sesión");
+    }
   }
   const choose = (role: Role) => {
     setEmail(users[role].email);
@@ -554,15 +565,14 @@ function Login({ onLogin }: { onLogin: (role: Role) => void }) {
             <Button type="submit">Iniciar sesión</Button>
           </form>
           <div className="demo-box">
-            <span>Acceso de demostración</span>
-            <p>Seleccione el perfil que desea explorar:</p>
+            <span>Acceso local</span>
+            <p>Seleccione el perfil para iniciar sesión:</p>
             <div className="demo-buttons">
               <button onClick={() => choose("director")}>Director</button>
               <button onClick={() => choose("coordinator")}>Coordinador</button>
               <button onClick={() => choose("teacher")}>Catedrático</button>
             </div>
           </div>
-          <small className="prototype-note">Entorno de demostración · Sin acceso real</small>
         </main>
       </div>
     </div>
@@ -598,34 +608,142 @@ function StatCard({
 
 function App() {
   const [role, setRole] = useState<Role | null>(null);
+  const [apiUser, setApiUser] = useState<ApiUser | null>(null);
   const [page, setPage] = useState<Page>("home");
   const [sidebar, setSidebar] = useState(false);
   const [teachers, setTeachers] = useState(teachersSeed);
   const [courses, setCourses] = useState(coursesSeed);
   const [plans, setPlans] = useState(initialPlans);
   const [toast, setToast] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const toRole = (value: string): Role =>
+    value === "DIRECTOR" ? "director" : value === "CATEDRATICO" ? "teacher" : "coordinator";
+  const mapTeacher = (item: any): Teacher => ({
+    id: Number(item.id_catedratico), code: item.codigo, name: item.nombre_completo,
+    email: item.correo || "", phone: item.telefono || "", active: item.activo,
+  });
+  const mapCourse = (item: any): Course => ({
+    id: Number(item.id_curso), code: item.codigo || item.curso_codigo,
+    name: item.nombre || item.curso_nombre, cycle: Number(item.ciclos?.[0]?.numero || item.ciclo_numero || 1),
+    description: item.descripcion, active: item.activo ?? true,
+  });
+  const mapPlan = (item: any): Plan => {
+    const statusMap: Record<string, PlanStatus> = {
+      BORRADOR: "Borrador", PENDIENTE_APROBACION: "Pendiente de aprobación", APROBADA: "Aprobada", RECHAZADA: "Rechazada", PUBLICADA: "Aprobada",
+    };
+    const days = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+    const assignments = (item.asignaciones || []).reduce((all: Assignment[], row: any) => {
+      if (!all.some((a) => a.id === Number(row.id_asignacion))) all.push({
+        id: Number(row.id_asignacion), courseId: Number(row.id_curso), teacherId: Number(row.id_catedratico),
+        cycle: Number(row.ciclo_numero), cycleId: Number(row.id_ciclo), sectionId: Number(row.id_seccion), roomId: Number(row.id_salon), periodId: Number(row.id_periodo), section: row.seccion_nombre, room: row.salon_codigo,
+        day: days[Number(row.dia_semana)], start: String(row.hora_inicio).slice(0, 5), end: String(row.hora_fin).slice(0, 5),
+      });
+      return all;
+    }, []);
+    return {
+      id: Number(item.id_planificacion), periodId: Number(item.id_periodo), year: Number(item.anio),
+      semester: Number(item.semestre) === 1 ? "Primer semestre" : "Segundo semestre",
+      sent: item.fecha_envio ? new Date(item.fecha_envio).toLocaleDateString("es-GT") : "Pendiente",
+      coordinator: item.coordinador_nombre || "", status: statusMap[item.estado] || "Borrador",
+      published: item.estado === "PUBLICADA", rejection: item.motivo_rechazo, assignments,
+    };
+  };
+
+  useEffect(() => {
+    api<{ user: ApiUser }>("/auth/me")
+      .then(({ user }) => { setApiUser(user); setRole(toRole(user.rol)); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!role) return;
+    setLoading(true);
+    Promise.all([api<any[]>("/catedraticos"), api<any[]>("/cursos"), api<any[]>("/planificaciones"), api<any[]>("/periodos")])
+      .then(async ([teacherRows, courseRows, initialPlanRows, periods]) => {
+        setTeachers(teacherRows.map(mapTeacher));
+        setCourses(courseRows.map(mapCourse));
+        let planRows = initialPlanRows;
+        if (role === "coordinator" && planRows.length === 0 && periods.length > 0) {
+          await apiJson("/planificaciones", { id_periodo: periods[0].id_periodo });
+          planRows = await api<any[]>("/planificaciones");
+        }
+        const details = await Promise.all(planRows.map((plan) => api<any>(`/planificaciones/${plan.id_planificacion}`)));
+        setPlans(details.map(mapPlan));
+      })
+      .catch((error) => notify(error instanceof Error ? error.message : "No se pudieron cargar los datos"))
+      .finally(() => setLoading(false));
+  }, [role]);
+
+  const persistTeacher = async (teacher: Teacher) => {
+    const payload = { codigo: teacher.code, nombre_completo: teacher.name, correo: teacher.email, telefono: teacher.phone };
+    const saved = await apiJson<any>(teacher.id ? `/catedraticos/${teacher.id}` : "/catedraticos", payload, teacher.id ? "PUT" : "POST");
+    return mapTeacher(saved);
+  };
+  const toggleTeacher = async (teacher: Teacher) => mapTeacher(await apiJson<any>(`/catedraticos/${teacher.id}/estado`, { activo: !teacher.active }, "PATCH"));
+  const persistCourse = async (course: Course) => {
+    const payload = { codigo: course.code, nombre: course.name, descripcion: course.description, id_ciclo: course.cycle };
+    const saved = await apiJson<any>(course.id ? `/cursos/${course.id}` : "/cursos", payload, course.id ? "PUT" : "POST");
+    return mapCourse(saved);
+  };
+  const sendPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/enviar`, {}); };
+  const publishPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/publicar`, {}); };
+  const decidePlan = async (plan: Plan, decision: "approve" | "reject", reason?: string) => {
+    await apiJson(`/planificaciones/${plan.id}/${decision === "approve" ? "aprobar" : "rechazar"}`, decision === "approve" ? {} : { motivo_rechazo: reason });
+  };
+  const persistAssignment = async (plan: Plan, assignment: Assignment) => {
+    const [sections, rooms, cycles] = await Promise.all([
+      api<any[]>(`/secciones?id_periodo=${plan.periodId}`),
+      api<any[]>("/salones"),
+      api<any[]>("/ciclos"),
+    ]);
+    const section = sections.find((item) => Number(item.id_seccion) === assignment.sectionId || (item.nombre === assignment.section && Number(item.id_ciclo) === (assignment.cycleId || assignment.cycle)));
+    const room = rooms.find((item) => Number(item.id_salon) === assignment.roomId || item.codigo === assignment.room);
+    const cycle = cycles.find((item) => Number(item.id_ciclo) === assignment.cycleId || Number(item.numero) === assignment.cycle);
+    if (!section || !room || !cycle || !plan.periodId) throw new Error("No se encontró el período, sección, ciclo o salón seleccionado");
+    const days = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+    const payload = {
+      id_periodo: plan.periodId, id_curso: assignment.courseId, id_ciclo: cycle.id_ciclo,
+      id_catedratico: assignment.teacherId, id_seccion: section.id_seccion, id_salon: room.id_salon,
+      bloques: [{ dia_semana: Math.max(1, days.indexOf(assignment.day)), hora_inicio: assignment.start, hora_fin: assignment.end }],
+    };
+    const result = await apiJson<any>(assignment.id ? `/planificaciones/${plan.id}/asignaciones/${assignment.id}` : `/planificaciones/${plan.id}/asignaciones`, payload, assignment.id ? "PUT" : "POST");
+    return { ...assignment, id: Number(result.id_asignacion || assignment.id || Date.now()), sectionId: Number(section.id_seccion), roomId: Number(room.id_salon), periodId: Number(plan.periodId), cycleId: Number(cycle.id_ciclo) };
+  };
+  const removeAssignment = async (plan: Plan, assignment: Assignment) => {
+    await api(`/planificaciones/${plan.id}/asignaciones/${assignment.id}`, { method: "DELETE" });
+  };
 
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 3000);
   }
+  if (loading && !role) return <div className="login-page"><div className="login-card"><p>Cargando sesión…</p></div></div>;
   if (!role)
     return (
       <Login
-        onLogin={(r) => {
-          setRole(r);
+        onLogin={(user) => {
+          setApiUser(user);
+          setRole(toRole(user.rol));
           setPage("home");
         }}
       />
     );
+  if (loading) return <div className="login-page"><div className="login-card"><p>Cargando información académica…</p></div></div>;
 
-  const user = users[role];
+  const user = apiUser ? { email: apiUser.correo, name: apiUser.nombre_completo, role: apiUser.rol } : users[role];
+  const emptyPlan: Plan = { id: 0, year: new Date().getFullYear(), semester: "Primer semestre", sent: "", coordinator: "", status: "Borrador", assignments: [] };
+  const activePlan = plans[0] || emptyPlan;
   const allowed = navByRole[role].map((n) => n.page);
   const safePage = allowed.includes(page) ? page : "home";
   const title = navByRole[role].find((n) => n.page === safePage)?.label || "Inicio";
   const logout = () => {
-    setRole(null);
-    setPage("home");
+    void api("/auth/logout", { method: "POST" }).finally(() => {
+      setApiUser(null);
+      setRole(null);
+      setPage("home");
+    });
   };
 
   return (
@@ -713,10 +831,10 @@ function App() {
             />
           )}
           {safePage === "teachers" && (
-            <Teachers teachers={teachers} setTeachers={setTeachers} notify={notify} />
+            <Teachers teachers={teachers} setTeachers={setTeachers} notify={notify} onPersist={persistTeacher} onToggle={toggleTeacher} />
           )}
           {safePage === "courses" && (
-            <Courses courses={courses} setCourses={setCourses} notify={notify} />
+            <Courses courses={courses} setCourses={setCourses} notify={notify} onPersist={persistCourse} />
           )}
           {safePage === "planning" && (
             <Planning
@@ -725,6 +843,10 @@ function App() {
               teachers={teachers}
               courses={courses}
               notify={notify}
+              onSend={sendPlan}
+              onPublish={publishPlan}
+              onAssignmentSave={persistAssignment}
+              onAssignmentRemove={removeAssignment}
             />
           )}
           {safePage === "plans" && (
@@ -734,14 +856,15 @@ function App() {
               teachers={teachers}
               courses={courses}
               notify={notify}
+              onDecision={decidePlan}
             />
           )}
           {safePage === "my-courses" && (
-            <MyCourses assignments={plans[0].assignments} courses={courses} />
+            <MyCourses assignments={activePlan.assignments} courses={courses} />
           )}
           {safePage === "schedule" && (
             <Schedule
-              assignments={plans[0].assignments.filter((a) => a.teacherId === 1)}
+              assignments={activePlan.assignments.filter((a) => a.teacherId === 1)}
               courses={courses}
               compact={false}
             />
@@ -749,7 +872,7 @@ function App() {
           {safePage === "reports" && (
             <Reports
               role={role}
-              plan={plans.find((p) => p.published) || plans[0]}
+              plan={plans.find((p) => p.published) || activePlan}
               courses={courses}
               teachers={teachers}
               notify={notify}
@@ -835,7 +958,7 @@ function Dashboard({
       </div>
     );
   if (role === "teacher") {
-    const mine = plans[0].assignments.filter((a) => a.teacherId === 1);
+    const mine = (plans[0]?.assignments || []).filter((a) => a.teacherId === 1);
     return (
       <div className="page-stack">
         <div className="welcome">
@@ -971,10 +1094,14 @@ function Teachers({
   teachers,
   setTeachers,
   notify,
+  onPersist,
+  onToggle,
 }: {
   teachers: Teacher[];
   setTeachers: (v: Teacher[]) => void;
   notify: (s: string) => void;
+  onPersist?: (teacher: Teacher) => Promise<Teacher>;
+  onToggle?: (teacher: Teacher) => Promise<Teacher>;
 }) {
   const [query, setQuery] = useState("");
   const [edit, setEdit] = useState<Teacher | "new" | null>(null);
@@ -1035,10 +1162,14 @@ function Teachers({
                       </button>
                       <button
                         onClick={() => {
-                          setTeachers(
-                            teachers.map((x) => (x.id === t.id ? { ...x, active: !x.active } : x)),
-                          );
-                          notify(t.active ? "Catedrático desactivado" : "Catedrático activado");
+                          if (onToggle) void onToggle(t).then((updated) => {
+                            setTeachers(teachers.map((x) => (x.id === updated.id ? updated : x)));
+                            notify(updated.active ? "Catedrático activado" : "Catedrático desactivado");
+                          }).catch((error) => notify(error.message));
+                          else {
+                            setTeachers(teachers.map((x) => (x.id === t.id ? { ...x, active: !x.active } : x)));
+                            notify(t.active ? "Catedrático desactivado" : "Catedrático activado");
+                          }
                         }}
                         title="Cambiar estado"
                       >
@@ -1057,6 +1188,14 @@ function Teachers({
           teacher={edit === "new" ? undefined : edit}
           onClose={() => setEdit(null)}
           onSave={(t) => {
+            if (onPersist) {
+              void onPersist(t).then((saved) => {
+                setTeachers(edit === "new" ? [...teachers, saved] : teachers.map((x) => (x.id === saved.id ? saved : x)));
+                setEdit(null);
+                notify(edit === "new" ? "Catedrático registrado correctamente" : "Información actualizada correctamente");
+              }).catch((error) => notify(error.message));
+              return;
+            }
             setTeachers(
               edit === "new"
                 ? [...teachers, { ...t, id: Date.now() }]
@@ -1173,10 +1312,12 @@ function Courses({
   courses,
   setCourses,
   notify,
+  onPersist,
 }: {
   courses: Course[];
   setCourses: (v: Course[]) => void;
   notify: (s: string) => void;
+  onPersist?: (course: Course) => Promise<Course>;
 }) {
   const [query, setQuery] = useState("");
   const [cycle, setCycle] = useState("");
@@ -1256,6 +1397,14 @@ function Courses({
           course={edit === "new" ? undefined : edit}
           onClose={() => setEdit(null)}
           onSave={(c) => {
+            if (onPersist) {
+              void onPersist(c).then((saved) => {
+                setCourses(edit === "new" ? [...courses, saved] : courses.map((x) => (x.id === saved.id ? saved : x)));
+                setEdit(null);
+                notify("Curso guardado correctamente");
+              }).catch((error) => notify(error.message));
+              return;
+            }
             setCourses(
               edit === "new"
                 ? [...courses, { ...c, id: Date.now() }]
@@ -1353,12 +1502,20 @@ function Planning({
   teachers,
   courses,
   notify,
+  onSend,
+  onPublish,
+  onAssignmentSave,
+  onAssignmentRemove,
 }: {
   plans: Plan[];
   setPlans: (v: Plan[]) => void;
   teachers: Teacher[];
   courses: Course[];
   notify: (s: string) => void;
+  onSend?: (plan: Plan) => Promise<void>;
+  onPublish?: (plan: Plan) => Promise<void>;
+  onAssignmentSave?: (plan: Plan, assignment: Assignment) => Promise<Assignment>;
+  onAssignmentRemove?: (plan: Plan, assignment: Assignment) => Promise<void>;
 }) {
   const [planId, setPlanId] = useState(1);
   const plan = plans.find((p) => p.id === planId) || plans[0];
@@ -1380,6 +1537,13 @@ function Planning({
   const updatePlan = (patch: Partial<Plan>) =>
     setPlans(plans.map((p) => (p.id === plan.id ? { ...p, ...patch } : p)));
   function send() {
+    if (onSend) {
+      void onSend(plan).then(() => {
+        updatePlan({ status: "Pendiente de aprobación", sent: new Date().toLocaleDateString("es-GT"), rejection: undefined });
+        notify("Planificación enviada al Director");
+      }).catch((error) => notify(error.message));
+      return;
+    }
     updatePlan({ status: "Pendiente de aprobación", sent: "22 ene 2027", rejection: undefined });
     notify(
       plan.status === "Rechazada"
@@ -1518,6 +1682,13 @@ function Planning({
           </p>
           <Button
             onClick={() => {
+              if (onPublish) {
+                void onPublish(plan).then(() => {
+                  updatePlan({ published: true });
+                  notify("Planificación publicada correctamente");
+                }).catch((error) => notify(error.message));
+                return;
+              }
               updatePlan({ published: true });
               notify("Planificación publicada correctamente");
             }}
@@ -1558,6 +1729,14 @@ function Planning({
           courses={courses}
           onClose={() => setModal(null)}
           onSave={(a) => {
+            if (onAssignmentSave) {
+              void onAssignmentSave(plan, a).then((saved) => {
+                updatePlan({ assignments: modal === "new" ? [...plan.assignments, saved] : plan.assignments.map((x) => (x.id === saved.id ? saved : x)) });
+                setModal(null);
+                notify("Asignación guardada correctamente");
+              }).catch((error) => notify(error.message));
+              return;
+            }
             updatePlan({
               assignments:
                 modal === "new"
@@ -1571,6 +1750,14 @@ function Planning({
             modal === "new"
               ? undefined
               : () => {
+                  if (onAssignmentRemove) {
+                    void onAssignmentRemove(plan, modal).then(() => {
+                      updatePlan({ assignments: plan.assignments.filter((a) => a.id !== modal.id) });
+                      setModal(null);
+                      notify("Asignación eliminada");
+                    }).catch((error) => notify(error.message));
+                    return;
+                  }
                   updatePlan({ assignments: plan.assignments.filter((a) => a.id !== modal.id) });
                   setModal(null);
                   notify("Asignación eliminada");
@@ -1902,12 +2089,14 @@ function PlansReview({
   teachers,
   courses,
   notify,
+  onDecision,
 }: {
   plans: Plan[];
   setPlans: (v: Plan[]) => void;
   teachers: Teacher[];
   courses: Course[];
   notify: (s: string) => void;
+  onDecision?: (plan: Plan, decision: "approve" | "reject", reason?: string) => Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
   const [review, setReview] = useState<Plan | null>(null);
@@ -1916,6 +2105,15 @@ function PlansReview({
   const [error, setError] = useState("");
   const filtered = plans.filter((p) => !filter || p.status === filter);
   function update(status: PlanStatus, rejection?: string) {
+    if (!review) return;
+    if (onDecision) {
+      const decision = status === "Aprobada" ? "approve" : "reject";
+      void onDecision(review, decision, rejection).then(() => applyUpdate(status, rejection)).catch((error) => setError(error.message));
+      return;
+    }
+    applyUpdate(status, rejection);
+  }
+  function applyUpdate(status: PlanStatus, rejection?: string) {
     if (!review) return;
     const changed = { ...review, status, rejection };
     setPlans(plans.map((p) => (p.id === review.id ? changed : p)));
