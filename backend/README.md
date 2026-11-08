@@ -2,6 +2,8 @@
 
 API Node.js + Express + PostgreSQL para el esquema aprobado en `database/`.
 
+Comprobación de conexión: `GET /api/health/db`.
+
 ## Ejecución
 
 1. Crear la base y aplicar `database/schema.sql` y `database/seed.sql`.

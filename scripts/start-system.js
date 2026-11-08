@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 const frontendUrl = "http://localhost:8443/";
 const backendUrl = "http://localhost:3000/";
-const healthUrl = `${backendUrl}api/health`;
+const healthUrl = `${backendUrl}api/health/db`;
 
 console.log("");
 console.log("Sistema de Planificación de Cursos");

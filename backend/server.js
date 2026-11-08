@@ -61,10 +61,13 @@ function sendError(res, error) {
   return res.status(error.status || 500).json({ error: error.status ? error.message : "Error interno del servidor" });
 }
 
-app.get("/api/health", asyncRoute(async (_req, res) => {
+async function databaseHealth(_req, res) {
   await query("SELECT 1");
-  res.json({ ok: true, database: "connected" });
-}));
+  res.json({ database: process.env.DB_NAME || "planificacion_cursos", connected: true });
+}
+
+app.get("/api/health", asyncRoute(databaseHealth));
+app.get("/api/health/db", asyncRoute(databaseHealth));
 
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["correo", "password"]);

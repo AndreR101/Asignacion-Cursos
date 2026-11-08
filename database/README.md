@@ -34,6 +34,7 @@ psql -U postgres -d planificacion_cursos -f database/schema.sql
 psql -U postgres -d planificacion_cursos -f database/seed.sql
 psql -U postgres -d planificacion_cursos -f database/04_consultas_prueba.sql
 psql -U postgres -d planificacion_cursos -f database/05_pruebas_integridad.sql
+psql -U postgres -d planificacion_cursos -f database/06_verificacion_completa.sql
 ```
 
 `01_crear_base_datos.sql` crea la base solamente si no existe. Ningún script elimina tablas o registros.
@@ -68,6 +69,8 @@ Las cuentas demo se crean con `pgcrypto` y bcrypt. Las tres usan inicialmente `D
 - `v_cursos_asignados`: una fila por asignación, sin repetirla por cada bloque.
 - `v_planificaciones_pendientes`: planificaciones en `PENDIENTE_APROBACION`.
 - `v_planificaciones_publicadas`: planificaciones en `PUBLICADA`.
+
+`06_verificacion_completa.sql` es una verificación de solo lectura para generar el informe de conexión, conteos, usuarios demo, hashes bcrypt, relaciones, IDs y vistas.
 
 ## Contrato para Node.js + pg
 
