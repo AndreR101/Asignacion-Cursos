@@ -1,0 +1,84 @@
+INSTALACIÓN, RESTAURACIÓN Y EJECUCIÓN
+=====================================
+
+1. DEPENDENCIAS NECESARIAS
+
+Instalar en la computadora:
+
+- Node.js, preferiblemente versión 20 o superior.
+- PostgreSQL, versión 14 o superior.
+- Git, si el proyecto se descargará desde GitHub.
+- psql, incluido normalmente con PostgreSQL.
+
+Desde la carpeta principal del proyecto ejecutar:
+
+    npm install
+
+Este comando instala automáticamente React, Vite, Express, pg, bcrypt,
+dotenv, express-session, Tailwind CSS y TypeScript.
+
+
+2. CONFIGURAR VARIABLES DE ENTORNO
+
+Crear un archivo llamado .env en la carpeta principal del proyecto:
+
+    DB_HOST=localhost
+    DB_PORT=5433
+    DB_NAME=planificacion_cursos
+    DB_USER=postgres
+    DB_PASSWORD=SU_CONTRASEÑA_LOCAL
+    SESSION_SECRET=clave-local-segura
+    PORT=3000
+    FRONTEND_PORT=8443
+
+Si PostgreSQL utiliza el puerto 5432, cambiar DB_PORT a 5432 en este archivo
+y también en los comandos de restauración.
+
+No subir el archivo .env a GitHub.
+
+
+3. RESTAURAR LA BASE DE DATOS COMPLETA
+
+El archivo database/planificacion_cursos_actual.sql contiene la estructura,
+relaciones, vistas, secuencias y datos actuales del sistema.
+
+Desde la carpeta principal del proyecto, crear la base de datos:
+
+    psql -h localhost -p 5433 -U postgres -f database/01_crear_base_datos.sql
+
+Después restaurar la información completa:
+
+    psql -h localhost -p 5433 -U postgres -d planificacion_cursos -f database/planificacion_cursos_actual.sql
+
+Si psql no es reconocido por PowerShell, utilizar la ruta completa:
+
+    & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -p 5433 -U postgres -d planificacion_cursos -f "database\planificacion_cursos_actual.sql"
+
+La restauración debe realizarse sobre una base nueva o vacía. No ejecutar el
+respaldo encima de una base que ya tenga información del sistema.
+
+
+4. EJECUTAR EL SISTEMA
+
+Desde la carpeta principal:
+
+    npm start
+
+Direcciones esperadas:
+
+    Frontend: http://localhost:8443
+    Backend:  http://localhost:3000
+    Health DB: http://localhost:3000/api/health/db
+
+La respuesta esperada de Health DB es similar a:
+
+    { "database": "planificacion_cursos", "connected": true }
+
+
+5. NOTAS DE SEGURIDAD
+
+- El archivo .env debe configurarse manualmente en cada computadora.
+- No publicar contraseñas de PostgreSQL en GitHub.
+- El respaldo SQL contiene hashes y datos actuales de usuarios; mantenerlo
+  en un repositorio privado.
+- Para uso real, cambiar las contraseñas demo.
