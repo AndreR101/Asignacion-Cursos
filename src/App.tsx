@@ -17,6 +17,7 @@ type PlanStatus = "Borrador" | "Pendiente de aprobación" | "Aprobada" | "Rechaz
 
 type Teacher = {
   id: number;
+  userId?: number;
   code: string;
   name: string;
   email: string;
@@ -31,6 +32,10 @@ type Course = {
   description?: string;
   active: boolean;
 };
+type Cycle = { id_ciclo: number; numero: number; nombre: string; activo: boolean };
+type Period = { id_periodo: number; anio: number; semestre: number; fecha_inicio: string; fecha_fin: string; estado: string };
+type Section = { id_seccion: number; id_periodo: number; id_ciclo: number; nombre: string; cupo_estimado: number; estado: string; ciclo_numero?: number };
+type Room = { id_salon: number; codigo: string; descripcion?: string; capacidad: number; estado: string };
 type Assignment = {
   id: number;
   courseId: number;
@@ -57,221 +62,6 @@ type Plan = {
   rejection?: string;
   published?: boolean;
   assignments: Assignment[];
-};
-
-const teachersSeed: Teacher[] = [
-  {
-    id: 1,
-    code: "CAT-001",
-    name: "Ana Lucía Méndez",
-    email: "amendez@universidad.edu.gt",
-    phone: "5551-1201",
-    active: true,
-  },
-  {
-    id: 2,
-    code: "CAT-002",
-    name: "Carlos Roberto López",
-    email: "clopez@universidad.edu.gt",
-    phone: "5551-1202",
-    active: true,
-  },
-  {
-    id: 3,
-    code: "CAT-003",
-    name: "María Fernanda Ruiz",
-    email: "mruiz@universidad.edu.gt",
-    phone: "5551-1203",
-    active: true,
-  },
-  {
-    id: 4,
-    code: "CAT-004",
-    name: "Jorge Estuardo Castillo",
-    email: "jcastillo@universidad.edu.gt",
-    phone: "5551-1204",
-    active: true,
-  },
-  {
-    id: 5,
-    code: "CAT-005",
-    name: "Sofía Alejandra Morales",
-    email: "smorales@universidad.edu.gt",
-    phone: "5551-1205",
-    active: true,
-  },
-  {
-    id: 6,
-    code: "CAT-006",
-    name: "Luis Alberto Gómez",
-    email: "lgomez@universidad.edu.gt",
-    phone: "5551-1206",
-    active: true,
-  },
-  {
-    id: 7,
-    code: "CAT-007",
-    name: "Paola Andrea Herrera",
-    email: "pherrera@universidad.edu.gt",
-    phone: "5551-1207",
-    active: false,
-  },
-];
-
-const coursesSeed: Course[] = [
-  { id: 1, code: "MAT-101", name: "Matemática I", cycle: 1, active: true },
-  { id: 2, code: "PRO-101", name: "Introducción a la Programación", cycle: 1, active: true },
-  { id: 3, code: "FIS-201", name: "Física I", cycle: 2, active: true },
-  { id: 4, code: "PRO-202", name: "Programación II", cycle: 2, active: true },
-  { id: 5, code: "BDD-301", name: "Bases de Datos I", cycle: 3, active: true },
-  { id: 6, code: "EST-301", name: "Estadística", cycle: 3, active: true },
-  { id: 7, code: "RED-401", name: "Redes de Computadoras", cycle: 4, active: true },
-  { id: 8, code: "ING-402", name: "Ingeniería de Software", cycle: 4, active: true },
-  { id: 9, code: "SO-501", name: "Sistemas Operativos", cycle: 5, active: true },
-  { id: 10, code: "IA-701", name: "Inteligencia Artificial", cycle: 7, active: true },
-];
-
-const baseAssignments: Assignment[] = [
-  {
-    id: 1,
-    courseId: 1,
-    teacherId: 1,
-    cycle: 1,
-    section: "A",
-    room: "A-101",
-    day: "Lunes",
-    start: "07:00",
-    end: "08:30",
-  },
-  {
-    id: 2,
-    courseId: 2,
-    teacherId: 2,
-    cycle: 1,
-    section: "A",
-    room: "A-102",
-    day: "Martes",
-    start: "08:30",
-    end: "10:00",
-  },
-  {
-    id: 3,
-    courseId: 3,
-    teacherId: 3,
-    cycle: 2,
-    section: "A",
-    room: "B-201",
-    day: "Miércoles",
-    start: "10:00",
-    end: "11:30",
-  },
-  {
-    id: 4,
-    courseId: 4,
-    teacherId: 1,
-    cycle: 2,
-    section: "B",
-    room: "B-202",
-    day: "Jueves",
-    start: "07:00",
-    end: "08:30",
-  },
-  {
-    id: 5,
-    courseId: 5,
-    teacherId: 4,
-    cycle: 3,
-    section: "A",
-    room: "A-101",
-    day: "Lunes",
-    start: "10:00",
-    end: "11:30",
-  },
-  {
-    id: 6,
-    courseId: 6,
-    teacherId: 1,
-    cycle: 3,
-    section: "B",
-    room: "B-201",
-    day: "Viernes",
-    start: "08:30",
-    end: "10:00",
-  },
-  {
-    id: 7,
-    courseId: 7,
-    teacherId: 5,
-    cycle: 4,
-    section: "A",
-    room: "A-102",
-    day: "Martes",
-    start: "10:00",
-    end: "11:30",
-  },
-  {
-    id: 8,
-    courseId: 8,
-    teacherId: 1,
-    cycle: 4,
-    section: "C",
-    room: "B-202",
-    day: "Miércoles",
-    start: "13:00",
-    end: "14:30",
-  },
-];
-
-const initialPlans: Plan[] = [
-  {
-    id: 1,
-    year: 2027,
-    semester: "Primer semestre",
-    sent: "—",
-    coordinator: "Lic. Elena Ramírez",
-    status: "Borrador",
-    assignments: baseAssignments,
-  },
-  {
-    id: 2,
-    year: 2027,
-    semester: "Primer semestre",
-    sent: "14 ene 2027",
-    coordinator: "Lic. Elena Ramírez",
-    status: "Pendiente de aprobación",
-    assignments: baseAssignments.slice(0, 7),
-  },
-  {
-    id: 3,
-    year: 2026,
-    semester: "Segundo semestre",
-    sent: "10 nov 2026",
-    coordinator: "Lic. Elena Ramírez",
-    status: "Rechazada",
-    rejection:
-      "Revisar el traslape de salón en la sección B y completar la asignación del tercer ciclo.",
-    assignments: baseAssignments.slice(0, 5),
-  },
-  {
-    id: 4,
-    year: 2026,
-    semester: "Primer semestre",
-    sent: "18 may 2026",
-    coordinator: "Lic. Elena Ramírez",
-    status: "Aprobada",
-    published: true,
-    assignments: baseAssignments.slice(0, 6),
-  },
-];
-
-const users = {
-  director: { email: "director@universidad.edu.gt", name: "Dr. Ricardo Valdés", role: "Director" },
-  coordinator: {
-    email: "coordinador@universidad.edu.gt",
-    name: "Lic. Elena Ramírez",
-    role: "Coordinador académico",
-  },
-  teacher: { email: "docente@universidad.edu.gt", name: "Ana Lucía Méndez", role: "Catedrático" },
 };
 
 const navByRole: Record<Role, { page?: Page; label: string; icon: string; logout?: boolean }[]> = {
@@ -492,11 +282,6 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
       setError(error instanceof Error ? error.message : "No se pudo iniciar sesión");
     }
   }
-  const choose = (role: Role) => {
-    setEmail(users[role].email);
-    setPassword("Demo123");
-    setError("");
-  };
   return (
     <div className="login-page">
       <div className="login-shell">
@@ -519,8 +304,8 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
           </div>
           <div className="login-period" aria-hidden="true">
             <span>PERÍODO ACADÉMICO</span>
-            <strong>01 · 2027</strong>
-            <p>Primer semestre</p>
+            <strong>Período local</strong>
+            <p>Consulte los períodos disponibles al iniciar sesión</p>
           </div>
           <small className="visual-foot">Planificación académica · UMG</small>
         </section>
@@ -564,15 +349,6 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
             )}
             <Button type="submit">Iniciar sesión</Button>
           </form>
-          <div className="demo-box">
-            <span>Acceso local</span>
-            <p>Seleccione el perfil para iniciar sesión:</p>
-            <div className="demo-buttons">
-              <button onClick={() => choose("director")}>Director</button>
-              <button onClick={() => choose("coordinator")}>Coordinador</button>
-              <button onClick={() => choose("teacher")}>Catedrático</button>
-            </div>
-          </div>
         </main>
       </div>
     </div>
@@ -611,16 +387,20 @@ function App() {
   const [apiUser, setApiUser] = useState<ApiUser | null>(null);
   const [page, setPage] = useState<Page>("home");
   const [sidebar, setSidebar] = useState(false);
-  const [teachers, setTeachers] = useState(teachersSeed);
-  const [courses, setCourses] = useState(coursesSeed);
-  const [plans, setPlans] = useState(initialPlans);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [cycles, setCycles] = useState<Cycle[]>([]);
+  const [periods, setPeriods] = useState<Period[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
 
   const toRole = (value: string): Role =>
     value === "DIRECTOR" ? "director" : value === "CATEDRATICO" ? "teacher" : "coordinator";
   const mapTeacher = (item: any): Teacher => ({
-    id: Number(item.id_catedratico), code: item.codigo, name: item.nombre_completo,
+    id: Number(item.id_catedratico), userId: item.id_usuario ? Number(item.id_usuario) : undefined, code: item.codigo, name: item.nombre_completo,
     email: item.correo || "", phone: item.telefono || "", active: item.activo,
   });
   const mapCourse = (item: any): Course => ({
@@ -660,13 +440,17 @@ function App() {
   useEffect(() => {
     if (!role) return;
     setLoading(true);
-    Promise.all([api<any[]>("/catedraticos"), api<any[]>("/cursos"), api<any[]>("/planificaciones"), api<any[]>("/periodos")])
-      .then(async ([teacherRows, courseRows, initialPlanRows, periods]) => {
+    Promise.all([api<any[]>("/catedraticos"), api<any[]>("/cursos"), api<any[]>("/planificaciones"), api<Period[]>("/periodos"), api<Cycle[]>("/ciclos"), api<Section[]>("/secciones"), api<Room[]>("/salones")])
+      .then(async ([teacherRows, courseRows, initialPlanRows, periodRows, cycleRows, sectionRows, roomRows]) => {
         setTeachers(teacherRows.map(mapTeacher));
         setCourses(courseRows.map(mapCourse));
+        setPeriods(periodRows);
+        setCycles(cycleRows);
+        setSections(sectionRows);
+        setRooms(roomRows);
         let planRows = initialPlanRows;
-        if (role === "coordinator" && planRows.length === 0 && periods.length > 0) {
-          await apiJson("/planificaciones", { id_periodo: periods[0].id_periodo });
+        if (role === "coordinator" && planRows.length === 0 && periodRows.length > 0) {
+          await apiJson("/planificaciones", { id_periodo: periodRows[0].id_periodo });
           planRows = await api<any[]>("/planificaciones");
         }
         const details = await Promise.all(planRows.map((plan) => api<any>(`/planificaciones/${plan.id_planificacion}`)));
@@ -714,6 +498,24 @@ function App() {
   const removeAssignment = async (plan: Plan, assignment: Assignment) => {
     await api(`/planificaciones/${plan.id}/asignaciones/${assignment.id}`, { method: "DELETE" });
   };
+  const queryReport = async (filters: { periodId?: string; cycleId?: string; sectionId?: string }) => {
+    const query = new URLSearchParams();
+    if (filters.periodId) query.set("id_periodo", filters.periodId);
+    if (filters.cycleId) query.set("id_ciclo", filters.cycleId);
+    if (filters.sectionId) query.set("id_seccion", filters.sectionId);
+    const rows = await api<any[]>(role === "teacher" ? "/mi-horario" : `/reportes/planificacion?${query.toString()}`);
+    const days = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+    return rows.map((row) => ({
+      id: Number(row.id_asignacion), courseId: Number(row.id_curso), teacherId: Number(row.id_catedratico),
+      cycle: Number(row.ciclo_numero), cycleId: Number(row.id_ciclo), section: row.seccion_nombre, sectionId: Number(row.id_seccion),
+      room: row.salon_codigo, roomId: Number(row.id_salon), periodId: Number(row.id_periodo), day: days[Number(row.dia_semana)],
+      start: String(row.hora_inicio).slice(0, 5), end: String(row.hora_fin).slice(0, 5),
+    }));
+  };
+  const createSection = async (plan: Plan, name: string, capacity: number, cycleId: number) => {
+    const section = await apiJson<Section>("/secciones", { id_periodo: plan.periodId, id_ciclo: cycleId, nombre: name, cupo_estimado: capacity });
+    setSections((current) => [...current, section]);
+  };
 
   function notify(message: string) {
     setToast(message);
@@ -732,9 +534,12 @@ function App() {
     );
   if (loading) return <div className="login-page"><div className="login-card"><p>Cargando información académica…</p></div></div>;
 
-  const user = apiUser ? { email: apiUser.correo, name: apiUser.nombre_completo, role: apiUser.rol } : users[role];
+  const user = { email: apiUser?.correo || "", name: apiUser?.nombre_completo || "", role: apiUser?.rol || role };
   const emptyPlan: Plan = { id: 0, year: new Date().getFullYear(), semester: "Primer semestre", sent: "", coordinator: "", status: "Borrador", assignments: [] };
   const activePlan = plans[0] || emptyPlan;
+  const currentTeacherId = teachers.find((teacher) => teacher.userId === apiUser?.id_usuario)?.id;
+  const currentPeriod = periods.find((period) => period.id_periodo === activePlan.periodId) || periods[0];
+  const periodLabel = currentPeriod ? `${currentPeriod.semestre === 1 ? "Primer" : "Segundo"} semestre ${currentPeriod.anio}` : "Sin período seleccionado";
   const allowed = navByRole[role].map((n) => n.page);
   const safePage = allowed.includes(page) ? page : "home";
   const title = navByRole[role].find((n) => n.page === safePage)?.label || "Inicio";
@@ -803,7 +608,7 @@ function App() {
           </button>
           <div>
             <h1>{title}</h1>
-            <p>Primer semestre 2027</p>
+            <p>{periodLabel}</p>
           </div>
           <div className="header-user">
             <span className="online" />
@@ -827,6 +632,9 @@ function App() {
               plans={plans}
               teachers={teachers}
               courses={courses}
+              teacherId={currentTeacherId}
+              userName={user.name}
+              periodLabel={periodLabel}
               go={setPage}
             />
           )}
@@ -834,7 +642,7 @@ function App() {
             <Teachers teachers={teachers} setTeachers={setTeachers} notify={notify} onPersist={persistTeacher} onToggle={toggleTeacher} />
           )}
           {safePage === "courses" && (
-            <Courses courses={courses} setCourses={setCourses} notify={notify} onPersist={persistCourse} />
+            <Courses courses={courses} setCourses={setCourses} notify={notify} onPersist={persistCourse} cycles={cycles} />
           )}
           {safePage === "planning" && (
             <Planning
@@ -847,6 +655,11 @@ function App() {
               onPublish={publishPlan}
               onAssignmentSave={persistAssignment}
               onAssignmentRemove={removeAssignment}
+              cycles={cycles}
+              periods={periods}
+              sections={sections}
+              rooms={rooms}
+              onSectionCreate={createSection}
             />
           )}
           {safePage === "plans" && (
@@ -857,14 +670,15 @@ function App() {
               courses={courses}
               notify={notify}
               onDecision={decidePlan}
+              periods={periods}
             />
           )}
           {safePage === "my-courses" && (
-            <MyCourses assignments={activePlan.assignments} courses={courses} />
+            <MyCourses assignments={activePlan.assignments} courses={courses} teacherId={currentTeacherId} periodLabel={periodLabel} />
           )}
           {safePage === "schedule" && (
             <Schedule
-              assignments={activePlan.assignments.filter((a) => a.teacherId === 1)}
+              assignments={activePlan.assignments.filter((a) => !currentTeacherId || a.teacherId === currentTeacherId)}
               courses={courses}
               compact={false}
             />
@@ -876,6 +690,11 @@ function App() {
               courses={courses}
               teachers={teachers}
               notify={notify}
+              teacherId={currentTeacherId}
+              cycles={cycles}
+              periods={periods}
+              sections={sections}
+              onQuery={queryReport}
             />
           )}
           {safePage === "profile" && <Profile user={user} />}
@@ -899,21 +718,29 @@ function Dashboard({
   plans,
   teachers,
   courses,
+  teacherId,
+  userName,
+  periodLabel,
   go,
 }: {
   role: Role;
   plans: Plan[];
   teachers: Teacher[];
   courses: Course[];
+  teacherId?: number;
+  userName: string;
+  periodLabel: string;
   go: (p: Page) => void;
 }) {
+  const recentAssignments = plans.flatMap((plan) => plan.assignments).slice(0, 4);
+  const plannedSections = new Set(plans.flatMap((plan) => plan.assignments.map((assignment) => assignment.sectionId || assignment.section))).size;
   if (role === "director")
     return (
       <div className="page-stack">
         <div className="welcome">
           <div>
             <span className="eyebrow">RESUMEN EJECUTIVO</span>
-            <h2>Buenos días, Dr. Valdés</h2>
+            <h2>Buenos días, {userName}</h2>
             <p>Estas son las propuestas que requieren su atención.</p>
           </div>
           <Button icon="calendar" onClick={() => go("plans")}>
@@ -958,13 +785,13 @@ function Dashboard({
       </div>
     );
   if (role === "teacher") {
-    const mine = (plans[0]?.assignments || []).filter((a) => a.teacherId === 1);
+    const mine = (plans[0]?.assignments || []).filter((a) => !teacherId || a.teacherId === teacherId);
     return (
       <div className="page-stack">
         <div className="welcome">
           <div>
             <span className="eyebrow">PANEL DOCENTE</span>
-            <h2>Buenos días, Ana Lucía</h2>
+            <h2>Buenos días, {userName}</h2>
             <p>Consulte sus cursos y horario para el período actual.</p>
           </div>
           <Badge status="Período activo" />
@@ -974,13 +801,13 @@ function Dashboard({
             icon="book"
             label="Cursos asignados"
             value={mine.length}
-            note="Primer semestre 2027"
+            note={periodLabel}
           />
           <StatCard
             icon="calendar"
             label="Próximo bloque"
             value="Lun 07:00"
-            note="Matemática I · A-101"
+            note={mine[0] ? `${courses.find((course) => course.id === mine[0].courseId)?.name || "Curso"} · ${mine[0].room}` : "Sin bloques asignados"}
             tone="orange"
           />
           <StatCard
@@ -1011,7 +838,7 @@ function Dashboard({
       <div className="welcome">
         <div>
           <span className="eyebrow">PERÍODO ACADÉMICO ACTUAL</span>
-          <h2>Primer semestre 2027</h2>
+          <h2>{periodLabel}</h2>
           <p>La planificación se encuentra en etapa de preparación.</p>
         </div>
         <Button icon="calendar" onClick={() => go("planning")}>
@@ -1029,21 +856,21 @@ function Dashboard({
           icon="book"
           label="Cursos"
           value={courses.filter((c) => c.active).length}
-          note="10 en el pensum"
+          note={`${courses.length} registrados`}
           tone="green"
         />
         <StatCard
           icon="calendar"
           label="Secciones planificadas"
-          value="5"
-          note="Ciclos 1 al 4"
+          value={plannedSections}
+          note="Desde la planificación actual"
           tone="orange"
         />
         <StatCard
           icon="report"
           label="Estado actual"
-          value="Borrador"
-          note="8 asignaciones"
+          value={plans[0]?.status || "Sin planificación"}
+          note={`${plans[0]?.assignments.length || 0} asignaciones`}
           tone="gray"
         />
       </div>
@@ -1056,7 +883,7 @@ function Dashboard({
             </div>
           </div>
           <div className="activity-list">
-            {baseAssignments.slice(0, 4).map((a) => (
+            {recentAssignments.map((a) => (
               <div className="activity" key={a.id}>
                 <div className="activity-icon">
                   <Icon name="book" />
@@ -1313,11 +1140,13 @@ function Courses({
   setCourses,
   notify,
   onPersist,
+  cycles,
 }: {
   courses: Course[];
   setCourses: (v: Course[]) => void;
   notify: (s: string) => void;
   onPersist?: (course: Course) => Promise<Course>;
+  cycles: Cycle[];
 }) {
   const [query, setQuery] = useState("");
   const [cycle, setCycle] = useState("");
@@ -1350,9 +1179,9 @@ function Courses({
           </div>
           <select value={cycle} onChange={(e) => setCycle(e.target.value)}>
             <option value="">Todos los ciclos</option>
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-              <option key={n} value={n}>
-                Ciclo {n}
+            {cycles.filter((cycle) => cycle.activo).map((cycle) => (
+              <option key={cycle.id_ciclo} value={cycle.numero}>
+                {cycle.nombre}
               </option>
             ))}
           </select>
@@ -1395,6 +1224,7 @@ function Courses({
       {edit && (
         <CourseModal
           course={edit === "new" ? undefined : edit}
+          cycles={cycles}
           onClose={() => setEdit(null)}
           onSave={(c) => {
             if (onPersist) {
@@ -1423,10 +1253,12 @@ function CourseModal({
   course,
   onClose,
   onSave,
+  cycles,
 }: {
   course?: Course;
   onClose: () => void;
   onSave: (c: Course) => void;
+  cycles: Cycle[];
 }) {
   const [form, setForm] = useState({
     code: course?.code || "",
@@ -1460,9 +1292,9 @@ function CourseModal({
               value={form.cycle}
               onChange={(e) => setForm({ ...form, cycle: +e.target.value })}
             >
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                <option key={n} value={n}>
-                  {n}° ciclo
+              {cycles.filter((cycle) => cycle.activo).map((cycle) => (
+                <option key={cycle.id_ciclo} value={cycle.numero}>
+                  {cycle.nombre}
                 </option>
               ))}
             </select>
@@ -1506,6 +1338,11 @@ function Planning({
   onPublish,
   onAssignmentSave,
   onAssignmentRemove,
+  cycles,
+  periods,
+  sections,
+  rooms,
+  onSectionCreate,
 }: {
   plans: Plan[];
   setPlans: (v: Plan[]) => void;
@@ -1516,8 +1353,15 @@ function Planning({
   onPublish?: (plan: Plan) => Promise<void>;
   onAssignmentSave?: (plan: Plan, assignment: Assignment) => Promise<Assignment>;
   onAssignmentRemove?: (plan: Plan, assignment: Assignment) => Promise<void>;
+  cycles: Cycle[];
+  periods: Period[];
+  sections: Section[];
+  rooms: Room[];
+  onSectionCreate?: (plan: Plan, name: string, capacity: number, cycleId: number) => Promise<void>;
 }) {
-  const [planId, setPlanId] = useState(1);
+  const [planId, setPlanId] = useState(plans[0]?.id || 0);
+  const [cycleFilter, setCycleFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
   const plan = plans.find((p) => p.id === planId) || plans[0];
   const [modal, setModal] = useState<Assignment | "new" | "section" | null>(null);
   const teacherLoads = useMemo(
@@ -1526,14 +1370,19 @@ function Planning({
         .filter((teacher) => teacher.active)
         .map((teacher) => ({
           teacher,
-          courses: plan.assignments.filter((assignment) => assignment.teacherId === teacher.id)
-            .length,
+          courses: Math.max(0, ...["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((day) => new Set(plan.assignments.filter((assignment) => assignment.teacherId === teacher.id && assignment.day === day).map((assignment) => assignment.courseId)).size)),
         }))
         .sort((a, b) => a.courses - b.courses),
     [teachers, plan.assignments],
   );
   const unassignedTeachers = teacherLoads.filter((item) => item.courses === 0).length;
   const editable = plan.status === "Borrador" || plan.status === "Rechazada";
+  const planSections = sections.filter((section) => Number(section.id_periodo) === Number(plan.periodId));
+  const filteredSections = planSections.filter((section) => !cycleFilter || Number(section.id_ciclo) === Number(cycleFilter));
+  const visibleAssignments = plan.assignments.filter((assignment) =>
+    (!cycleFilter || assignment.cycleId === Number(cycleFilter) || assignment.cycle === Number(cycleFilter)) &&
+    (!sectionFilter || assignment.sectionId === Number(sectionFilter) || assignment.section === sectionFilter),
+  );
   const updatePlan = (patch: Partial<Plan>) =>
     setPlans(plans.map((p) => (p.id === plan.id ? { ...p, ...patch } : p)));
   function send() {
@@ -1544,7 +1393,7 @@ function Planning({
       }).catch((error) => notify(error.message));
       return;
     }
-    updatePlan({ status: "Pendiente de aprobación", sent: "22 ene 2027", rejection: undefined });
+    updatePlan({ status: "Pendiente de aprobación", sent: new Date().toLocaleDateString("es-GT"), rejection: undefined });
     notify(
       plan.status === "Rechazada"
         ? "Planificación reenviada para aprobación"
@@ -1576,9 +1425,7 @@ function Planning({
       <section className="panel filter-bar">
         <Field label="Planificación">
           <select value={planId} onChange={(e) => setPlanId(+e.target.value)}>
-            {plans
-              .filter((p) => p.id <= 3)
-              .map((p) => (
+            {plans.map((p) => (
                 <option value={p.id} key={p.id}>
                   {p.semester} {p.year} · {p.status}
                 </option>
@@ -1586,28 +1433,31 @@ function Planning({
           </select>
         </Field>
         <Field label="Año">
-          <select>
-            <option>2027</option>
+          <select value={plan.periodId || ""} onChange={(e) => {
+            const nextPlan = plans.find((item) => item.periodId === Number(e.target.value));
+            if (nextPlan) setPlanId(nextPlan.id);
+          }}>
+            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.anio}</option>)}
           </select>
         </Field>
         <Field label="Semestre">
-          <select>
-            <option>Primero</option>
+          <select value={plan.periodId || ""} onChange={(e) => {
+            const nextPlan = plans.find((item) => item.periodId === Number(e.target.value));
+            if (nextPlan) setPlanId(nextPlan.id);
+          }}>
+            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.semestre === 1 ? "Primero" : "Segundo"} · {period.anio}</option>)}
           </select>
         </Field>
         <Field label="Ciclo">
-          <select>
+          <select value={cycleFilter} onChange={(e) => { setCycleFilter(e.target.value); setSectionFilter(""); }}>
             <option>Todos</option>
-            <option>1° ciclo</option>
-            <option>2° ciclo</option>
+            {cycles.filter((cycle) => cycle.activo).map((cycle) => <option value={cycle.id_ciclo} key={cycle.id_ciclo}>{cycle.numero}° ciclo</option>)}
           </select>
         </Field>
         <Field label="Sección">
-          <select>
+          <select value={sectionFilter} onChange={(e) => setSectionFilter(e.target.value)}>
             <option>Todas</option>
-            <option>A</option>
-            <option>B</option>
-            <option>C</option>
+            {filteredSections.filter((section) => section.estado === "ACTIVA").map((section) => <option value={section.id_seccion} key={section.id_seccion}>{section.nombre}</option>)}
           </select>
         </Field>
         <div className="status-field">
@@ -1619,14 +1469,14 @@ function Planning({
       <section className="panel teacher-load-panel">
         <div className="panel-head">
           <div>
-            <h3>Carga docente del período</h3>
-            <p>Distribución de cursos entre los catedráticos activos</p>
+            <h3>Carga docente diaria</h3>
+            <p>Máximo de cursos distintos en un mismo día</p>
           </div>
           <div className={`unassigned-count ${unassignedTeachers === 0 ? "complete" : ""}`}>
             <span>{unassignedTeachers}</span>
             <div>
               <strong>Sin asignación</strong>
-              <small>de {teacherLoads.length} catedráticos activos</small>
+                    <small>de {teacherLoads.length} catedráticos activos</small>
             </div>
           </div>
         </div>
@@ -1649,7 +1499,7 @@ function Planning({
                       : `${assignedCourses} ${assignedCourses === 1 ? "curso asignado" : "cursos asignados"}`}
                   </span>
                 </div>
-                <div className="load-dots" aria-label={`${assignedCourses} de 4 cursos asignados`}>
+                <div className="load-dots" aria-label={`${assignedCourses} de 4 cursos asignados en un día`}>
                   {[1, 2, 3, 4].map((slot) => (
                     <i key={slot} className={slot <= assignedCourses ? "filled" : ""} />
                   ))}
@@ -1701,7 +1551,7 @@ function Planning({
         <div className="panel-head">
           <div>
             <h3>Matriz semanal</h3>
-            <p>{plan.assignments.length} asignaciones · Primer semestre 2027</p>
+            <p>{plan.assignments.length} asignaciones · {plan.semester} {plan.year}</p>
           </div>
           {editable && (
             <div className="page-actions">
@@ -1715,7 +1565,7 @@ function Planning({
           )}
         </div>
         <Schedule
-          assignments={plan.assignments}
+          assignments={visibleAssignments}
           courses={courses}
           teachers={teachers}
           onEdit={editable ? (a) => setModal(a) : undefined}
@@ -1727,6 +1577,9 @@ function Planning({
           assignments={plan.assignments}
           teachers={teachers}
           courses={courses}
+          cycles={cycles}
+          sections={planSections}
+          rooms={rooms}
           onClose={() => setModal(null)}
           onSave={(a) => {
             if (onAssignmentSave) {
@@ -1765,7 +1618,7 @@ function Planning({
           }
         />
       )}
-      {modal === "section" && <SectionModal onClose={() => setModal(null)} notify={notify} />}
+      {modal === "section" && <SectionModal onClose={() => setModal(null)} notify={notify} cycles={cycles} onCreate={onSectionCreate ? (name, capacity, cycleId) => onSectionCreate(plan, name, capacity, cycleId) : undefined} />}
     </div>
   );
 }
@@ -1779,6 +1632,9 @@ function AssignmentModal({
   assignments,
   teachers,
   courses,
+  cycles,
+  sections,
+  rooms,
   onClose,
   onSave,
   onRemove,
@@ -1787,6 +1643,9 @@ function AssignmentModal({
   assignments: Assignment[];
   teachers: Teacher[];
   courses: Course[];
+  cycles: Cycle[];
+  sections: Section[];
+  rooms: Room[];
   onClose: () => void;
   onSave: (a: Assignment) => void;
   onRemove?: () => void;
@@ -1794,11 +1653,14 @@ function AssignmentModal({
   const [form, setForm] = useState<Assignment>(
     assignment || {
       id: 0,
-      courseId: 1,
-      teacherId: 1,
-      cycle: 1,
-      section: "A",
-      room: "A-101",
+      courseId: courses[0]?.id || 0,
+      teacherId: teachers[0]?.id || 0,
+      cycle: cycles[0]?.numero || 0,
+      cycleId: cycles[0]?.id_ciclo,
+      section: sections[0]?.nombre || "",
+      sectionId: sections[0]?.id_seccion,
+      room: rooms[0]?.codigo || "",
+      roomId: rooms[0]?.id_salon,
       day: "Lunes",
       start: "07:00",
       end: "08:30",
@@ -1809,8 +1671,9 @@ function AssignmentModal({
     e.preventDefault();
     setError("");
     const others = assignments.filter((a) => a.id !== form.id);
-    if (others.filter((a) => a.teacherId === form.teacherId).length >= 4)
-      return setError("El catedrático ya tiene cuatro cursos asignados en este semestre");
+    const coursesOnDay = new Set(others.filter((a) => a.teacherId === form.teacherId && a.day === form.day).map((a) => a.courseId));
+    if (coursesOnDay.size >= 4 && !coursesOnDay.has(form.courseId))
+      return setError("El catedrático ya tiene cuatro cursos distintos asignados ese día");
     if (
       others.some(
         (a) =>
@@ -1849,7 +1712,7 @@ function AssignmentModal({
   return (
     <Modal
       title={assignment ? "Editar asignación" : "Nueva asignación"}
-      subtitle="Primer semestre 2027 · Configure el bloque académico."
+      subtitle="Configure el bloque académico del período seleccionado."
       onClose={onClose}
       width="wide"
     >
@@ -1864,7 +1727,7 @@ function AssignmentModal({
           <div className="form-grid three-col">
             <Field label="Período">
               <select>
-                <option>Primer semestre 2027</option>
+                <option>Período de la planificación seleccionada</option>
               </select>
             </Field>
             <Field label="Ciclo">
@@ -1872,9 +1735,9 @@ function AssignmentModal({
                 value={form.cycle}
                 onChange={(e) => setForm({ ...form, cycle: +e.target.value })}
               >
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                  <option value={n} key={n}>
-                    {n}° ciclo
+                {cycles.filter((cycle) => cycle.activo).map((cycle) => (
+                  <option value={cycle.numero} key={cycle.id_ciclo}>
+                    {cycle.numero}° ciclo
                   </option>
                 ))}
               </select>
@@ -1882,10 +1745,13 @@ function AssignmentModal({
             <Field label="Sección">
               <select
                 value={form.section}
-                onChange={(e) => setForm({ ...form, section: e.target.value })}
+                onChange={(e) => {
+                  const selected = sections.find((section) => section.nombre === e.target.value && Number(section.id_ciclo) === (form.cycleId || form.cycle));
+                  setForm({ ...form, section: e.target.value, sectionId: selected?.id_seccion });
+                }}
               >
-                {["A", "B", "C", "D", "E"].map((x) => (
-                  <option key={x}>{x}</option>
+                {sections.filter((section) => Number(section.id_ciclo) === (form.cycleId || form.cycle) && section.estado === "ACTIVA").map((section) => (
+                  <option value={section.nombre} key={section.id_seccion}>{section.nombre}</option>
                 ))}
               </select>
             </Field>
@@ -1894,7 +1760,8 @@ function AssignmentModal({
                 value={form.courseId}
                 onChange={(e) => {
                   const c = courses.find((x) => x.id === +e.target.value);
-                  setForm({ ...form, courseId: +e.target.value, cycle: c?.cycle || 1 });
+                  const cycle = cycles.find((item) => item.numero === (c?.cycle || 0));
+                  setForm({ ...form, courseId: +e.target.value, cycle: c?.cycle || 0, cycleId: cycle?.id_ciclo });
                 }}
               >
                 {courses
@@ -1923,10 +1790,13 @@ function AssignmentModal({
             <Field label="Salón">
               <select
                 value={form.room}
-                onChange={(e) => setForm({ ...form, room: e.target.value })}
+                onChange={(e) => {
+                  const selected = rooms.find((room) => room.codigo === e.target.value);
+                  setForm({ ...form, room: e.target.value, roomId: selected?.id_salon });
+                }}
               >
-                {["A-101", "A-102", "B-201", "B-202"].map((x) => (
-                  <option key={x}>{x}</option>
+                {rooms.filter((room) => room.estado === "DISPONIBLE").map((room) => (
+                  <option value={room.codigo} key={room.id_salon}>{room.codigo}</option>
                 ))}
               </select>
             </Field>
@@ -1970,9 +1840,11 @@ function AssignmentModal({
   );
 }
 
-function SectionModal({ onClose, notify }: { onClose: () => void; notify: (s: string) => void }) {
+function SectionModal({ onClose, notify, cycles, onCreate }: { onClose: () => void; notify: (s: string) => void; cycles: Cycle[]; onCreate?: (name: string, capacity: number, cycleId: number) => Promise<void> }) {
   const [section, setSection] = useState("C");
   const [capacity, setCapacity] = useState("35");
+  const [cycleId, setCycleId] = useState(cycles[0]?.id_ciclo || 0);
+  const [error, setError] = useState("");
   return (
     <Modal
       title="Configurar nueva sección"
@@ -1982,16 +1854,21 @@ function SectionModal({ onClose, notify }: { onClose: () => void; notify: (s: st
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (onCreate) {
+            void onCreate(section, Number(capacity), cycleId).then(() => {
+              onClose();
+              notify(`Sección ${section} creada con cupo para ${capacity} estudiantes`);
+            }).catch((reason) => setError(reason.message));
+            return;
+          }
           onClose();
           notify(`Sección ${section} creada con cupo para ${capacity} estudiantes`);
         }}
       >
         <div className="modal-body form-grid">
           <Field label="Ciclo académico">
-            <select>
-              <option>1° ciclo</option>
-              <option>2° ciclo</option>
-              <option>3° ciclo</option>
+            <select value={cycleId} onChange={(e) => setCycleId(Number(e.target.value))}>
+              {cycles.filter((cycle) => cycle.activo).map((cycle) => <option key={cycle.id_ciclo} value={cycle.id_ciclo}>{cycle.numero}° ciclo</option>)}
             </select>
           </Field>
           <Field label="Identificador de sección">
@@ -2015,6 +1892,7 @@ function SectionModal({ onClose, notify }: { onClose: () => void; notify: (s: st
               El cupo es una referencia de planificación y puede ajustarse posteriormente.
             </span>
           </div>
+          {error && <div className="form-error"><Icon name="alert" size={18} />{error}</div>}
         </div>
         <ModalActions onClose={onClose} submit="Crear sección" />
       </form>
@@ -2025,7 +1903,7 @@ function SectionModal({ onClose, notify }: { onClose: () => void; notify: (s: st
 function Schedule({
   assignments,
   courses,
-  teachers = teachersSeed,
+  teachers = [],
   compact = false,
   onEdit,
 }: {
@@ -2090,6 +1968,7 @@ function PlansReview({
   courses,
   notify,
   onDecision,
+  periods,
 }: {
   plans: Plan[];
   setPlans: (v: Plan[]) => void;
@@ -2097,6 +1976,7 @@ function PlansReview({
   courses: Course[];
   notify: (s: string) => void;
   onDecision?: (plan: Plan, decision: "approve" | "reject", reason?: string) => Promise<void>;
+  periods: Period[];
 }) {
   const [filter, setFilter] = useState("");
   const [review, setReview] = useState<Plan | null>(null);
@@ -2144,8 +2024,7 @@ function PlansReview({
           </select>
           <select>
             <option>Todos los períodos</option>
-            <option>Primer semestre 2027</option>
-            <option>Segundo semestre 2026</option>
+            {periods.map((period) => <option key={period.id_periodo}>{period.semestre === 1 ? "Primer" : "Segundo"} semestre {period.anio}</option>)}
           </select>
           <span className="record-count">{filtered.length} planificaciones</span>
         </div>
@@ -2348,14 +2227,14 @@ function PlansTable({ plans, action }: { plans: Plan[]; action: (p: Plan) => voi
   );
 }
 
-function MyCourses({ assignments, courses }: { assignments: Assignment[]; courses: Course[] }) {
-  const mine = assignments.filter((a) => a.teacherId === 1);
+function MyCourses({ assignments, courses, teacherId, periodLabel }: { assignments: Assignment[]; courses: Course[]; teacherId?: number; periodLabel: string }) {
+  const mine = assignments.filter((a) => !teacherId || a.teacherId === teacherId);
   return (
     <div className="page-stack">
       <div className="page-title">
         <div>
           <h2>Mis cursos asignados</h2>
-          <p>Primer semestre 2027 · Información de solo lectura.</p>
+          <p>{periodLabel} · Información de solo lectura.</p>
         </div>
         <Badge status="Período activo" />
       </div>
@@ -2408,15 +2287,34 @@ function Reports({
   courses,
   teachers,
   notify,
+  teacherId,
+  cycles,
+  periods,
+  sections,
+  onQuery,
 }: {
   role: Role;
   plan: Plan;
   courses: Course[];
   teachers: Teacher[];
   notify: (s: string) => void;
+  teacherId?: number;
+  cycles: Cycle[];
+  periods: Period[];
+  sections: Section[];
+  onQuery: (filters: { periodId?: string; cycleId?: string; sectionId?: string }) => Promise<Assignment[]>;
 }) {
-  const rows =
-    role === "teacher" ? plan.assignments.filter((a) => a.teacherId === 1) : plan.assignments;
+  const [periodId, setPeriodId] = useState(String(plan.periodId || ""));
+  const [cycleId, setCycleId] = useState("");
+  const [sectionId, setSectionId] = useState("");
+  const [reportAssignments, setReportAssignments] = useState<Assignment[]>(plan.assignments);
+  const selectedPeriod = periods.find((period) => Number(period.id_periodo) === Number(periodId));
+  const rows = reportAssignments.filter((assignment) =>
+    (role !== "teacher" || !teacherId || assignment.teacherId === teacherId) &&
+    (!cycleId || assignment.cycleId === Number(cycleId) || assignment.cycle === Number(cycleId)) &&
+    (!sectionId || assignment.sectionId === Number(sectionId) || assignment.section === sectionId),
+  );
+  const reportSections = sections.filter((section) => !periodId || Number(section.id_periodo) === Number(periodId));
   return (
     <div className="page-stack">
       <div className="page-title">
@@ -2440,34 +2338,31 @@ function Reports({
       </div>
       <section className="panel report-filters">
         <Field label="Año">
-          <select>
-            <option>2027</option>
-            <option>2026</option>
+          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.anio}</option>)}
           </select>
         </Field>
         <Field label="Semestre">
-          <select>
-            <option>Primero</option>
-            <option>Segundo</option>
+          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.semestre === 1 ? "Primero" : "Segundo"} · {period.anio}</option>)}
           </select>
         </Field>
         <Field label="Ciclo">
-          <select>
+          <select value={cycleId} onChange={(e) => { setCycleId(e.target.value); setSectionId(""); }}>
             <option>Todos</option>
-            {[1, 2, 3, 4, 5].map((n) => (
-              <option key={n}>{n}° ciclo</option>
-            ))}
+            {cycles.filter((cycle) => cycle.activo).map((cycle) => <option key={cycle.id_ciclo} value={cycle.id_ciclo}>{cycle.numero}° ciclo</option>)}
           </select>
         </Field>
         <Field label="Sección">
-          <select>
+          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)}>
             <option>Todas</option>
-            <option>A</option>
-            <option>B</option>
-            <option>C</option>
+            {reportSections.filter((section) => !cycleId || Number(section.id_ciclo) === Number(cycleId)).map((section) => <option key={section.id_seccion} value={section.id_seccion}>{section.nombre}</option>)}
           </select>
         </Field>
-        <Button onClick={() => notify("Reporte actualizado")}>Consultar</Button>
+        <Button onClick={() => void onQuery({ periodId, cycleId, sectionId }).then((result) => {
+          setReportAssignments(result);
+          notify("Reporte actualizado");
+        }).catch((error) => notify(error.message))}>Consultar</Button>
       </section>
       <section className="panel printable">
         <div className="report-heading">
@@ -2479,7 +2374,7 @@ function Reports({
           <div>
             <span>UNIVERSIDAD MARIANO GÁLVEZ DE GUATEMALA</span>
             <h2>Planificación académica</h2>
-            <p>Primer semestre 2027 · Generado para consulta</p>
+            <p>{selectedPeriod ? `${selectedPeriod.semestre === 1 ? "Primer" : "Segundo"} semestre ${selectedPeriod.anio}` : "Período no seleccionado"} · Generado para consulta</p>
           </div>
           <Badge status={plan.published ? "Publicada" : plan.status} />
         </div>

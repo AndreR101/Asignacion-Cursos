@@ -64,10 +64,12 @@ WHERE a.id_periodo = $1 AND a.id_catedratico = $2 AND b.dia_semana = $3
   AND b.hora_inicio < $5::time AND b.hora_fin > $4::time
 LIMIT 1;
 
--- Carga docente: máximo cuatro cursos distintos por período.
-SELECT a.id_periodo, a.id_catedratico, cat.nombre_completo,
+-- Carga docente: máximo cuatro cursos distintos por catedrático y día.
+SELECT a.id_periodo, a.id_catedratico, cat.nombre_completo, b.dia_semana,
        count(DISTINCT a.id_curso) AS cursos_distintos
-FROM asignaciones a JOIN catedraticos cat USING (id_catedratico)
+FROM asignaciones a
+JOIN catedraticos cat USING (id_catedratico)
+JOIN bloques_horarios b USING (id_asignacion)
 WHERE a.id_periodo = $1
-GROUP BY a.id_periodo, a.id_catedratico, cat.nombre_completo
+GROUP BY a.id_periodo, a.id_catedratico, cat.nombre_completo, b.dia_semana
 ORDER BY cursos_distintos DESC;

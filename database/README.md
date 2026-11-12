@@ -33,8 +33,6 @@ psql -U postgres -f database/01_crear_base_datos.sql
 psql -U postgres -d planificacion_cursos -f database/schema.sql
 psql -U postgres -d planificacion_cursos -f database/seed.sql
 psql -U postgres -d planificacion_cursos -f database/04_consultas_prueba.sql
-psql -U postgres -d planificacion_cursos -f database/05_pruebas_integridad.sql
-psql -U postgres -d planificacion_cursos -f database/06_verificacion_completa.sql
 ```
 
 `01_crear_base_datos.sql` crea la base solamente si no existe. Ningún script elimina tablas o registros.
@@ -70,8 +68,6 @@ Las cuentas demo se crean con `pgcrypto` y bcrypt. Las tres usan inicialmente `D
 - `v_planificaciones_pendientes`: planificaciones en `PENDIENTE_APROBACION`.
 - `v_planificaciones_publicadas`: planificaciones en `PUBLICADA`.
 
-`06_verificacion_completa.sql` es una verificación de solo lectura para generar el informe de conexión, conteos, usuarios demo, hashes bcrypt, relaciones, IDs y vistas.
-
 ## Contrato para Node.js + pg
 
 - Todas las claves son enteros (`integer` o `bigint`); `pg` puede devolver `bigint` como texto según su configuración.
@@ -79,7 +75,7 @@ Las cuentas demo se crean con `pgcrypto` y bcrypt. Las tres usan inicialmente `D
 - Los estados de planificación son `BORRADOR`, `PENDIENTE_APROBACION`, `APROBADA`, `RECHAZADA` y `PUBLICADA`.
 - Los días usan ISO: `1=lunes` a `7=domingo`.
 - Para crear una asignación, el backend debe abrir una transacción, bloquear la planificación o el catedrático del período, comprobar carga, sección, salón y traslapes, insertar `asignaciones` y sus `bloques_horarios`, y confirmar.
-- El máximo de cuatro cursos se calcula con `count(distinct id_curso)` por `id_periodo` y `id_catedratico`; nunca se deben contar los bloques.
+- El máximo de cuatro cursos se calcula con `count(distinct id_curso)` por `id_periodo`, `id_catedratico` y `dia_semana`; nunca se deben contar los bloques como cursos.
 - Las consultas deben usar parámetros (`$1`, `$2`, etc.). Nunca concatenar valores recibidos del usuario.
 - `usuarios.password_hash` debe recibir únicamente un hash generado por el backend (por ejemplo, Argon2id o bcrypt). Los scripts iniciales no crean cuentas de acceso.
 

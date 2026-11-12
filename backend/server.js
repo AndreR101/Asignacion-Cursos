@@ -341,6 +341,8 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
   if (!plan.rowCount) throw httpError(404, "Planificación no encontrada");
   if (!['BORRADOR', 'RECHAZADA'].includes(plan.rows[0].estado)) throw httpError(409, "La planificación no puede editarse en su estado actual");
   const values = [id(data.id_curso, "id_curso"), id(data.id_ciclo, "id_ciclo"), id(data.id_seccion, "id_seccion"), id(data.id_periodo || plan.rows[0].id_periodo, "id_periodo")];
+  const teacherId = id(data.id_catedratico, "id_catedratico");
+  await client.query("SELECT id_catedratico FROM catedraticos WHERE id_catedratico = $1 FOR UPDATE", [teacherId]);
   const section = await client.query(`SELECT s.id_periodo, s.id_ciclo FROM secciones s WHERE s.id_seccion = $1`, [values[2]]);
   if (!section.rowCount || Number(section.rows[0].id_periodo) !== Number(values[3]) || Number(section.rows[0].id_ciclo) !== Number(values[1])) throw httpError(400, "La sección no pertenece al mismo período y ciclo de la asignación");
   const pensum = await client.query("SELECT 1 FROM pensum WHERE id_curso = $1 AND id_ciclo = $2", values.slice(0, 2));
@@ -349,14 +351,21 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
     FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
     WHERE a.id_periodo = $1 AND a.id_planificacion = $2 AND ($3::bigint IS NULL OR a.id_asignacion <> $3)
       AND (a.id_catedratico = $4 OR a.id_salon = $5) AND b.dia_semana = ANY($6::smallint[])
-      AND b.hora_inicio < ANY($7::time[]) AND b.hora_fin > ANY($8::time[])`, [values[3], planId, assignmentId, id(data.id_catedratico, "id_catedratico"), id(data.id_salon, "id_salon"), data.bloques.map((b) => Number(b.dia_semana)), data.bloques.map((b) => b.hora_fin), data.bloques.map((b) => b.hora_inicio)]);
+      AND b.hora_inicio < ANY($7::time[]) AND b.hora_fin > ANY($8::time[])`, [values[3], planId, assignmentId, teacherId, id(data.id_salon, "id_salon"), data.bloques.map((b) => Number(b.dia_semana)), data.bloques.map((b) => b.hora_fin), data.bloques.map((b) => b.hora_inicio)]);
   if (conflicts.rows.some((row) => data.bloques.some((b) => Number(b.dia_semana) === Number(row.dia_semana) && b.hora_inicio < String(row.hora_fin) && b.hora_fin > String(row.hora_inicio)))) {
     throw httpError(409, "Existe un traslape de horario docente o un conflicto de salón");
   }
-  const load = await client.query(`SELECT count(DISTINCT id_curso)::integer AS total FROM asignaciones
-    WHERE id_periodo = $1 AND id_catedratico = $2 AND ($3::bigint IS NULL OR id_asignacion <> $3)`, [values[3], id(data.id_catedratico, "id_catedratico"), assignmentId]);
-  const alreadyCourse = await client.query(`SELECT 1 FROM asignaciones WHERE id_periodo = $1 AND id_catedratico = $2 AND id_curso = $3 AND ($4::bigint IS NULL OR id_asignacion <> $4)`, [values[3], id(data.id_catedratico, "id_catedratico"), values[0], assignmentId]);
-  if (Number(load.rows[0].total) >= 4 && !alreadyCourse.rowCount) throw httpError(409, "El catedrático no puede superar cuatro cursos distintos en el período");
+  const days = [...new Set(data.bloques.map((block) => Number(block.dia_semana)))];
+  for (const day of days) {
+    const load = await client.query(`SELECT count(DISTINCT a.id_curso)::integer AS total,
+        count(DISTINCT a.id_curso) FILTER (WHERE a.id_curso = $3)::integer AS same_course
+      FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
+      WHERE a.id_periodo = $1 AND a.id_catedratico = $2 AND b.dia_semana = $4
+        AND ($5::bigint IS NULL OR a.id_asignacion <> $5)`, [values[3], teacherId, values[0], day, assignmentId]);
+    if (Number(load.rows[0].total) >= 4 && Number(load.rows[0].same_course) === 0) {
+      throw httpError(409, `El catedrático no puede superar cuatro cursos distintos el día ${day}`);
+    }
+  }
   return { periodo: values[3], planEstado: plan.rows[0].estado };
 }
 
