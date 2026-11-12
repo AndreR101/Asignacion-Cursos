@@ -68,6 +68,8 @@ Las cuentas demo se crean con `pgcrypto` y bcrypt. Las tres usan inicialmente `D
 - `v_planificaciones_pendientes`: planificaciones en `PENDIENTE_APROBACION`.
 - `v_planificaciones_publicadas`: planificaciones en `PUBLICADA`.
 
+La migración [12_laboratorios_cursos.sql](./12_laboratorios_cursos.sql) agrega al catálogo `cursos` las columnas `tiene_laboratorio boolean NOT NULL DEFAULT false` y `costo_laboratorio numeric(10,2) NULL`. El costo acepta `NULL`, pero no valores negativos.
+
 ## Contrato para Node.js + pg
 
 - Todas las claves son enteros (`integer` o `bigint`); `pg` puede devolver `bigint` como texto según su configuración.

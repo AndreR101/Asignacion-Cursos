@@ -7,11 +7,13 @@ type Page =
   | "home"
   | "teachers"
   | "courses"
+  | "rooms"
   | "planning"
   | "plans"
   | "my-courses"
   | "schedule"
   | "reports"
+  | "users"
   | "profile";
 type PlanStatus = "Borrador" | "Pendiente de aprobación" | "Aprobada" | "Rechazada";
 
@@ -32,6 +34,8 @@ type Course = {
   cycleIds?: number[];
   cycleNumbers?: number[];
   description?: string;
+  tieneLaboratorio: boolean;
+  costoLaboratorio?: number | null;
   active: boolean;
 };
 type Cycle = { id_ciclo: number; numero: number; nombre: string; activo: boolean };
@@ -59,9 +63,11 @@ type Assignment = {
   day: string;
   start: string;
   end: string;
+  planName?: string;
 };
 type Plan = {
   id: number;
+  name?: string;
   periodId?: number;
   year: number;
   semester: string;
@@ -78,13 +84,15 @@ const navByRole: Record<Role, { page?: Page; label: string; icon: string; logout
     { page: "home", label: "Inicio", icon: "home" },
     { page: "plans", label: "Planificaciones", icon: "calendar" },
     { page: "reports", label: "Reportes", icon: "report" },
+    { page: "users", label: "Usuarios", icon: "users" },
     { page: "profile", label: "Mi Perfil", icon: "user" },
     { label: "Cerrar sesión", icon: "logout", logout: true },
   ],
   coordinator: [
     { page: "home", label: "Inicio", icon: "home" },
-    { page: "teachers", label: "Catedráticos", icon: "users" },
+    { page: "teachers", label: "Usuarios y catedráticos", icon: "users" },
     { page: "courses", label: "Cursos", icon: "book" },
+    { page: "rooms", label: "Salones", icon: "building" },
     { page: "planning", label: "Planificación de Horarios", icon: "calendar" },
     { page: "reports", label: "Reportes", icon: "report" },
     { page: "profile", label: "Mi Perfil", icon: "user" },
@@ -94,6 +102,7 @@ const navByRole: Record<Role, { page?: Page; label: string; icon: string; logout
     { page: "home", label: "Inicio", icon: "home" },
     { page: "my-courses", label: "Mis Cursos", icon: "book" },
     { page: "schedule", label: "Mi Horario", icon: "calendar" },
+    { page: "reports", label: "Descargar horario", icon: "download" },
     { page: "profile", label: "Mi Perfil", icon: "user" },
     { label: "Cerrar sesión", icon: "logout", logout: true },
   ],
@@ -118,6 +127,12 @@ function Icon({ name, size = 19 }: { name: string; size?: number }) {
       <>
         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" />
         <path d="M4 5.5v14M8 7h8" />
+      </>
+    ),
+    building: (
+      <>
+        <path d="M4 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17" />
+        <path d="M16 9h3a1 1 0 0 1 1 1v11M8 7h4M8 11h4M8 15h4M10 21v-3h2v3" />
       </>
     ),
     calendar: (
@@ -273,12 +288,16 @@ function Modal({
 }
 
 type ApiUser = { id_usuario: number; nombre_completo: string; correo: string; rol: string };
+type ManagedUser = { id_usuario: number; nombre_completo: string; correo: string; activo: boolean; rol: string };
+type RecoveryRequest = { id_solicitud: number; correo: string; mensaje: string; estado: string; fecha_solicitud: string; nombre_completo?: string };
+type Notification = { id_notificacion: number; tipo: string; titulo: string; mensaje: string; leida: boolean; fecha_creacion: string };
 
 function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
+  const [forgot, setForgot] = useState(false);
   const [currentPeriod, setCurrentPeriod] = useState("2do ciclo 2026");
   useEffect(() => {
     api<{ anio: number; semestre: number }>("/periodo-actual")
@@ -288,6 +307,11 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
+      if (forgot) {
+        await apiJson("/recuperacion", { correo: email.trim() });
+        setError("Solicitud enviada al coordinador.");
+        return;
+      }
       const result = await api<{ user: ApiUser }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ correo: email.trim(), password }),
@@ -344,6 +368,7 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="nombre@universidad.edu.gt"
             />
+            {!forgot && <>
             <label>Contraseña</label>
             <div className="password">
               <input
@@ -356,13 +381,15 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
                 <Icon name="eye" />
               </button>
             </div>
+            </>}
             {error && (
               <div className="form-error">
                 <Icon name="alert" size={18} />
                 {error}
               </div>
             )}
-            <Button type="submit">Iniciar sesión</Button>
+            <Button type="submit">{forgot ? "Enviar solicitud" : "Iniciar sesión"}</Button>
+            <button type="button" className="text-link" onClick={() => { setForgot(!forgot); setError(""); }}>{forgot ? "Volver al inicio de sesión" : "¿Olvidó su contraseña?"}</button>
           </form>
         </main>
       </div>
@@ -409,8 +436,11 @@ function App() {
   const [periods, setPeriods] = useState<Period[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const toRole = (value: string): Role =>
     value === "DIRECTOR" ? "director" : value === "CATEDRATICO" ? "teacher" : "coordinator";
@@ -423,7 +453,7 @@ function App() {
     name: item.nombre || item.curso_nombre, cycle: Number(item.ciclos?.[0]?.numero || item.ciclo_numero || 1),
     cycleIds: item.ciclos?.map((cycle: any) => Number(cycle.id_ciclo)).filter(Boolean),
     cycleNumbers: item.ciclos?.map((cycle: any) => Number(cycle.numero)).filter(Boolean),
-    description: item.descripcion, active: item.activo ?? true,
+    description: item.descripcion, tieneLaboratorio: Boolean(item.tiene_laboratorio), costoLaboratorio: item.costo_laboratorio === null || item.costo_laboratorio === undefined ? null : Number(item.costo_laboratorio), active: item.activo ?? true,
   });
   const mapPlan = (item: any): Plan => {
     const statusMap: Record<string, PlanStatus> = {
@@ -434,12 +464,12 @@ function App() {
       if (!all.some((a) => a.id === Number(row.id_asignacion))) all.push({
         id: Number(row.id_asignacion), courseId: Number(row.id_curso), teacherId: Number(row.id_catedratico),
         cycle: Number(row.ciclo_numero), cycleId: Number(row.id_ciclo), sectionId: Number(row.id_seccion), roomId: Number(row.id_salon), periodId: Number(row.id_periodo), section: row.seccion_nombre, room: row.salon_codigo,
-        day: days[Number(row.dia_semana)], start: String(row.hora_inicio).slice(0, 5), end: String(row.hora_fin).slice(0, 5),
+        day: days[Number(row.dia_semana)], start: String(row.hora_inicio).slice(0, 5), end: String(row.hora_fin).slice(0, 5), planName: item.nombre,
       });
       return all;
     }, []);
     return {
-      id: Number(item.id_planificacion), periodId: Number(item.id_periodo), year: Number(item.anio),
+      id: Number(item.id_planificacion), name: item.nombre || "", periodId: Number(item.id_periodo), year: Number(item.anio),
       semester: Number(item.semestre) === 1 ? "Primer semestre" : "Segundo semestre",
       sent: item.fecha_envio ? new Date(item.fecha_envio).toLocaleDateString("es-GT") : "Pendiente",
       coordinator: item.coordinador_nombre || "", status: statusMap[item.estado] || "Borrador",
@@ -465,6 +495,7 @@ function App() {
         setCycles(cycleRows);
         setSections(sectionRows);
         setRooms(roomRows);
+        if (role !== "teacher") api<ManagedUser[]>("/usuarios").then(setManagedUsers).catch(() => undefined);
         if (role === "teacher") {
           const rows = initialPlanRows;
           const first = rows[0];
@@ -508,27 +539,94 @@ function App() {
       .finally(() => setLoading(false));
   }, [role]);
 
+  useEffect(() => {
+    if (!role) return undefined;
+    let mounted = true;
+    const loadNotifications = () => {
+      void api<Notification[]>("/notificaciones")
+        .then((items) => {
+          if (mounted) setNotifications(items);
+        })
+        .catch(() => undefined);
+    };
+    loadNotifications();
+    const timer = window.setInterval(loadNotifications, 15000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [role]);
+
+  useEffect(() => {
+    const viewTitles: Record<Page, string> = {
+      home: "Inicio",
+      teachers: "Catedráticos",
+      courses: "Cursos",
+      rooms: "Salones",
+      planning: "Planificación de horarios",
+      plans: "Planificaciones",
+      "my-courses": "Mis cursos",
+      schedule: "Mi horario",
+      reports: "Reportes",
+      users: "Usuarios",
+      profile: "Mi perfil",
+    };
+    document.title = `${viewTitles[page] || "Sistema"} · Planificación de Cursos · UMG`;
+  }, [page, role]);
+
+  const markNotificationRead = async (notification: Notification) => {
+    if (!notification.leida) {
+      await apiJson(`/notificaciones/${notification.id_notificacion}/leida`, {}, "PATCH");
+      setNotifications((items) => items.map((item) => item.id_notificacion === notification.id_notificacion ? { ...item, leida: true } : item));
+    }
+    const destination = notification.tipo === "ASIGNACION_DOCENTE" || notification.tipo === "HORARIO_PUBLICADO"
+      ? "schedule"
+      : notification.tipo === "PLANIFICACION_ENVIADA"
+        ? "plans"
+        : notification.tipo === "PLANIFICACION_APROBADA" || notification.tipo === "PLANIFICACION_RECHAZADA"
+          ? "planning"
+          : notification.tipo === "RECUPERACION_CONTRASENA"
+            ? "users"
+            : "home";
+    setPage(destination);
+    setShowNotifications(false);
+  };
+
   const persistTeacher = async (teacher: Teacher) => {
     const payload = { codigo: teacher.code, nombre_completo: teacher.name, correo: teacher.email, telefono: teacher.phone };
     const saved = await apiJson<any>(teacher.id ? `/catedraticos/${teacher.id}` : "/catedraticos", payload, teacher.id ? "PUT" : "POST");
     return mapTeacher(saved);
   };
   const toggleTeacher = async (teacher: Teacher) => mapTeacher(await apiJson<any>(`/catedraticos/${teacher.id}/estado`, { activo: !teacher.active }, "PATCH"));
+  const changeUserPassword = async (userId: number, password: string) => {
+    await apiJson(`/usuarios/${userId}/password`, { password }, "PATCH");
+  };
   const persistCourse = async (course: Course) => {
-    const payload = { codigo: course.code, nombre: course.name, descripcion: course.description, id_ciclo: course.cycle };
+    const payload = { codigo: course.code, nombre: course.name, descripcion: course.description, tiene_laboratorio: course.tieneLaboratorio, costo_laboratorio: course.costoLaboratorio ?? null, id_ciclo: course.cycle };
     const saved = await apiJson<any>(course.id ? `/cursos/${course.id}` : "/cursos", payload, course.id ? "PUT" : "POST");
     return mapCourse(saved);
   };
+  const persistRoom = async (room: Room) => {
+    const payload = { codigo: room.codigo, descripcion: room.descripcion || null, capacidad: room.capacidad, estado: room.estado };
+    const saved = await apiJson<Room>(room.id_salon ? `/salones/${room.id_salon}` : "/salones", payload, room.id_salon ? "PUT" : "POST");
+    return saved;
+  };
   const sendPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/enviar`, {}); };
   const publishPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/publicar`, {}); };
-  const createPlan = async () => {
-    const availablePeriod = periods.find((period) => !plans.some((plan) => Number(plan.periodId) === Number(period.id_periodo)));
-    if (!availablePeriod) {
-      const rejectedPlan = plans.find((plan) => plan.status === "Rechazada");
-      if (rejectedPlan) return rejectedPlan;
-      throw new Error("No hay períodos disponibles sin planificación");
+  const createPlan = async ({ nombre, anio, semestre }: { nombre: string; anio: number; semestre: number }) => {
+    let period = periods.find((item) => Number(item.anio) === anio && Number(item.semestre) === semestre);
+    if (!period) {
+      const fecha_inicio = `${anio}-${semestre === 1 ? "01-15" : "07-15"}`;
+      const fecha_fin = `${anio}-${semestre === 1 ? "06-30" : "12-15"}`;
+      period = await apiJson<Period>("/periodos", { anio, semestre, fecha_inicio, fecha_fin, estado: "PLANIFICACION" });
+      setPeriods([...periods, period]);
     }
-    const created = await apiJson<any>("/planificaciones", { id_periodo: availablePeriod.id_periodo });
+    const existing = plans.find((plan) => Number(plan.periodId) === Number(period!.id_periodo));
+    if (existing) {
+      if (existing.status === "Rechazada") return existing;
+      throw new Error("Ese período ya tiene una planificación");
+    }
+    const created = await apiJson<any>("/planificaciones", { id_periodo: period.id_periodo, nombre: nombre.trim() });
     const detail = await api<any>(`/planificaciones/${created.id_planificacion}`);
     return mapPlan(detail);
   };
@@ -541,12 +639,16 @@ function App() {
       api<any[]>("/salones"),
       api<any[]>("/ciclos"),
     ]);
-    const section = sections.find((item) => Number(item.id_seccion) === assignment.sectionId || (item.nombre === assignment.section && Number(item.id_ciclo) === (assignment.cycleId || assignment.cycle)));
+    const section = sections.find((item) => Number(item.id_seccion) === Number(assignment.sectionId)
+      && Number(item.id_periodo) === Number(plan.periodId))
+      || sections.find((item) => item.nombre === assignment.section
+        && Number(item.id_periodo) === Number(plan.periodId)
+        && Number(item.id_ciclo) === Number(assignment.cycleId));
     const room = rooms.find((item) => Number(item.id_salon) === assignment.roomId || item.codigo === assignment.room);
-    const cycle = cycles.find((item) => Number(item.id_ciclo) === assignment.cycleId || Number(item.numero) === assignment.cycle);
+    const cycle = cycles.find((item) => Number(item.id_ciclo) === Number(section?.id_ciclo));
     if (!section || !room || !cycle || !plan.periodId) throw new Error("No se encontró el período, sección, ciclo o salón seleccionado");
     const payload = {
-      id_periodo: plan.periodId, id_curso: assignment.courseId, id_ciclo: cycle.id_ciclo,
+      id_periodo: plan.periodId, id_curso: assignment.courseId, id_ciclo: section.id_ciclo,
       id_catedratico: assignment.teacherId, id_seccion: section.id_seccion, id_salon: room.id_salon,
       bloques: [{ dia_semana: 6, hora_inicio: assignment.start, hora_fin: assignment.end }],
     };
@@ -556,11 +658,15 @@ function App() {
   const removeAssignment = async (plan: Plan, assignment: Assignment) => {
     await api(`/planificaciones/${plan.id}/asignaciones/${assignment.id}`, { method: "DELETE" });
   };
-  const queryReport = async (filters: { periodId?: string; cycleId?: string; sectionId?: string }) => {
+  const queryReport = async (filters: { periodId?: string; cycleId?: string; sectionId?: string; teacherId?: string; courseId?: string; year?: string; semester?: string }) => {
     const query = new URLSearchParams();
     if (filters.periodId) query.set("id_periodo", filters.periodId);
     if (filters.cycleId) query.set("id_ciclo", filters.cycleId);
     if (filters.sectionId) query.set("id_seccion", filters.sectionId);
+    if (filters.teacherId) query.set("id_catedratico", filters.teacherId);
+    if (filters.courseId) query.set("id_curso", filters.courseId);
+    if (filters.year) query.set("anio", filters.year);
+    if (filters.semester) query.set("semestre", filters.semester);
     const rows = await api<any[]>(role === "teacher" ? "/mi-horario" : `/reportes/planificacion?${query.toString()}`);
     const days = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
     return rows.map((row) => ({
@@ -568,6 +674,7 @@ function App() {
       cycle: Number(row.ciclo_numero), cycleId: Number(row.id_ciclo), section: row.seccion_nombre, sectionId: Number(row.id_seccion),
       room: row.salon_codigo, roomId: Number(row.id_salon), periodId: Number(row.id_periodo), day: days[Number(row.dia_semana)],
       start: String(row.hora_inicio).slice(0, 5), end: String(row.hora_fin).slice(0, 5),
+      planName: row.planificacion_nombre,
     }));
   };
   const createSection = async (plan: Plan, name: string, capacity: number, cycleId: number) => {
@@ -669,6 +776,10 @@ function App() {
             <p>{periodLabel}</p>
           </div>
           <div className="header-user">
+            <button className="icon-btn" title="Notificaciones" onClick={() => setShowNotifications(!showNotifications)}>
+              <Icon name="alert" />
+              {notifications.some((notification) => !notification.leida) && <span className="notification-dot" />}
+            </button>
             <span className="online" />
             <div>
               <strong>{user.name}</strong>
@@ -682,6 +793,10 @@ function App() {
                 .join("")}
             </div>
           </div>
+          {showNotifications && <div className="notification-panel">
+            <div className="panel-head"><strong>Notificaciones</strong><button className="text-link" onClick={() => { void apiJson("/notificaciones/marcar-todas-leidas", {}, "PATCH"); setNotifications((items) => items.map((item) => ({ ...item, leida: true }))); }}>Marcar todas</button></div>
+            {notifications.length === 0 ? <p>No hay notificaciones.</p> : notifications.slice(0, 8).map((notification) => <button className={`notification-item ${notification.leida ? "read" : ""}`} key={notification.id_notificacion} onClick={() => void markNotificationRead(notification)}><strong>{notification.titulo}</strong><span>{notification.mensaje}</span><small>{new Date(notification.fecha_creacion).toLocaleString("es-GT")}</small></button>)}
+          </div>}
         </header>
         <main className="content">
           {safePage === "home" && (
@@ -697,10 +812,13 @@ function App() {
             />
           )}
           {safePage === "teachers" && (
-            <Teachers teachers={teachers} setTeachers={setTeachers} notify={notify} onPersist={persistTeacher} onToggle={toggleTeacher} />
+            <UsersAndTeachers teachers={teachers} setTeachers={setTeachers} users={managedUsers} notify={notify} onPersistTeacher={persistTeacher} onToggleTeacher={toggleTeacher} onChangePassword={changeUserPassword} />
           )}
           {safePage === "courses" && (
             <Courses courses={courses} setCourses={setCourses} notify={notify} onPersist={persistCourse} cycles={cycles} />
+          )}
+          {safePage === "rooms" && (
+            <Rooms rooms={rooms} setRooms={setRooms} notify={notify} onPersist={persistRoom} />
           )}
           {safePage === "planning" && (
             <Planning
@@ -757,6 +875,7 @@ function App() {
               onQuery={queryReport}
             />
           )}
+          {safePage === "users" && <Users users={managedUsers} onChangePassword={changeUserPassword} notify={notify} />}
           {safePage === "profile" && <Profile user={user} />}
         </main>
       </div>
@@ -1069,6 +1188,7 @@ function Teachers({
             </tbody>
           </table>
         </div>
+        {filtered.length === 0 && <div className="empty-state"><strong>No hay cursos registrados</strong><span>Prueba otra búsqueda o registra un nuevo curso para comenzar.</span></div>}
       </section>
       {edit && (
         <TeacherModal
@@ -1253,6 +1373,8 @@ function Courses({
                 <th>Código</th>
                 <th>Nombre del curso</th>
                 <th>Ciclo</th>
+                <th>Laboratorio</th>
+                <th>Costo</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -1265,6 +1387,8 @@ function Courses({
                   </td>
                   <td>{c.name}</td>
                   <td>{c.cycle}° ciclo</td>
+                  <td>{c.tieneLaboratorio ? "Sí" : "No"}</td>
+                  <td>{c.tieneLaboratorio && c.costoLaboratorio !== null && c.costoLaboratorio !== undefined ? `Q ${c.costoLaboratorio.toFixed(2)}` : "—"}</td>
                   <td>
                     <Badge status={c.active ? "Activo" : "Inactivo"} />
                   </td>
@@ -1325,8 +1449,11 @@ function CourseModal({
     name: course?.name || "",
     cycle: course?.cycle || 1,
     description: course?.description || "",
+    tieneLaboratorio: course?.tieneLaboratorio ?? false,
+    costoLaboratorio: course?.costoLaboratorio ?? null,
     active: course?.active ?? true,
   });
+  const [error, setError] = useState("");
   return (
     <Modal
       title={course ? "Editar curso" : "Nuevo curso"}
@@ -1336,10 +1463,16 @@ function CourseModal({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave({ ...form, id: course?.id || 0 });
+          if (form.costoLaboratorio !== null && (!Number.isFinite(form.costoLaboratorio) || form.costoLaboratorio < 0)) {
+            setError("El costo del laboratorio debe ser mayor o igual a cero");
+            return;
+          }
+          setError("");
+          onSave({ ...form, costoLaboratorio: form.tieneLaboratorio ? form.costoLaboratorio : null, id: course?.id || 0 });
         }}
       >
         <div className="modal-body form-grid">
+          {error && <div className="form-error">{error}</div>}
           <Field label="Código del curso">
             <input
               required
@@ -1372,6 +1505,26 @@ function CourseModal({
               onChange={(e) => setForm({ ...form, description: e.target.value })}
             />
           </Field>
+          <Field label="¿Tiene laboratorio?">
+            <select
+              value={String(form.tieneLaboratorio)}
+              onChange={(e) => setForm({ ...form, tieneLaboratorio: e.target.value === "true" })}
+            >
+              <option value="false">No</option>
+              <option value="true">Sí</option>
+            </select>
+          </Field>
+          <Field label="Costo del laboratorio (Q)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.costoLaboratorio ?? ""}
+              onChange={(e) => setForm({ ...form, costoLaboratorio: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="Opcional"
+              disabled={!form.tieneLaboratorio}
+            />
+          </Field>
           <Field label="Estado">
             <select
               value={String(form.active)}
@@ -1386,6 +1539,70 @@ function CourseModal({
       </form>
     </Modal>
   );
+}
+
+function Rooms({ rooms, setRooms, notify, onPersist }: { rooms: Room[]; setRooms: (value: Room[]) => void; notify: (message: string) => void; onPersist: (room: Room) => Promise<Room> }) {
+  const [edit, setEdit] = useState<Room | "new" | null>(null);
+  const [query, setQuery] = useState("");
+  const visible = rooms.filter((room) => `${room.codigo} ${room.descripcion || ""}`.toLowerCase().includes(query.toLowerCase()));
+  return (
+    <div className="page-stack">
+      <div className="page-title">
+        <div><h2>Catálogo de salones</h2><p>Administre los espacios disponibles para la planificación académica.</p></div>
+        <Button icon="plus" onClick={() => setEdit("new")}>Nuevo salón</Button>
+      </div>
+      <section className="panel">
+        <div className="toolbar">
+          <div className="search"><Icon name="search" /><input placeholder="Buscar por código o descripción..." value={query} onChange={(e) => setQuery(e.target.value)} /></div>
+          <span className="record-count">{visible.length} salones</span>
+        </div>
+        <div className="table-wrap"><table><thead><tr><th>Código</th><th>Descripción</th><th>Capacidad</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+          {visible.map((room) => <tr key={room.id_salon}><td><b>{room.codigo}</b></td><td>{room.descripcion || "Sin descripción"}</td><td>{room.capacidad} personas</td><td><Badge status={room.estado === "DISPONIBLE" ? "Disponible" : room.estado === "MANTENIMIENTO" ? "Mantenimiento" : "Inactivo"} /></td><td><div className="row-actions"><button title="Editar salón" onClick={() => setEdit(room)}><Icon name="edit" /></button></div></td></tr>)}
+          {visible.length === 0 && <tr><td colSpan={5} className="report-empty">No hay salones que coincidan con la búsqueda.</td></tr>}
+        </tbody></table></div>
+      </section>
+      {edit && <RoomModal room={edit === "new" ? undefined : edit} onClose={() => setEdit(null)} onSave={(room) => void onPersist(room).then((saved) => { setRooms(edit === "new" ? [...rooms, saved] : rooms.map((item) => item.id_salon === saved.id_salon ? saved : item)); setEdit(null); notify("Salón guardado correctamente"); }).catch((error) => notify(error.message))} />}
+    </div>
+  );
+}
+
+function RoomModal({ room, onClose, onSave }: { room?: Room; onClose: () => void; onSave: (room: Room) => void }) {
+  const [form, setForm] = useState<Room>({ id_salon: room?.id_salon || 0, codigo: room?.codigo || "", descripcion: room?.descripcion || "", capacidad: room?.capacidad || 1, estado: room?.estado || "DISPONIBLE" });
+  const [error, setError] = useState("");
+  return <Modal title={room ? "Editar salón" : "Nuevo salón"} subtitle="Registre el espacio y su capacidad para usarlo en las asignaciones." onClose={onClose}>
+    <form onSubmit={(event) => { event.preventDefault(); if (!form.codigo.trim() || form.capacidad < 1) { setError("Ingrese un código y una capacidad válida"); return; } setError(""); onSave({ ...form, codigo: form.codigo.trim(), capacidad: Number(form.capacidad) }); }}>
+      <div className="modal-body form-grid">
+        {error && <div className="form-error">{error}</div>}
+        <Field label="Código del salón"><input required value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value.toUpperCase() })} placeholder="A-101" /></Field>
+        <Field label="Capacidad"><input required type="number" min="1" value={form.capacidad} onChange={(e) => setForm({ ...form, capacidad: Number(e.target.value) })} /></Field>
+        <Field label="Descripción" wide><input value={form.descripcion || ""} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} placeholder="Edificio, aula o laboratorio" /></Field>
+        <Field label="Estado"><select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })}><option value="DISPONIBLE">Disponible</option><option value="MANTENIMIENTO">Mantenimiento</option><option value="INACTIVO">Inactivo</option></select></Field>
+      </div>
+      <ModalActions onClose={onClose} submit="Guardar salón" />
+    </form>
+  </Modal>;
+}
+
+function NewPlanModal({ periods, onClose, onCreate }: { periods: Period[]; onClose: () => void; onCreate: (input: { nombre: string; anio: number; semestre: number }) => Promise<void> }) {
+  const currentYear = new Date().getFullYear();
+  const currentSemester = new Date().getMonth() + 1 >= 7 ? 2 : 1;
+  const [nombre, setNombre] = useState("");
+  const [anio, setAnio] = useState(String(currentYear));
+  const [semestre, setSemestre] = useState(String(currentSemester));
+  const [error, setError] = useState("");
+  const existing = periods.find((period) => Number(period.anio) === Number(anio) && Number(period.semestre) === Number(semestre));
+  return <Modal title="Nueva planificación" subtitle="Defina el nombre, año y semestre de la planificación." onClose={onClose}>
+    <form onSubmit={(event) => { event.preventDefault(); if (!nombre.trim()) { setError("Ingrese el nombre de la planificación"); return; } void onCreate({ nombre: nombre.trim(), anio: Number(anio), semestre: Number(semestre) }).catch((reason) => setError(reason.message)); }}>
+      <div className="modal-body form-grid">
+        <Field label="Nombre de la planificación" wide><input value={nombre} onChange={(event) => setNombre(event.target.value)} placeholder="Programación académica" autoFocus /></Field>
+        <Field label="Año"><input type="number" min="2000" max="2200" value={anio} onChange={(event) => setAnio(event.target.value)} /></Field>
+        <Field label="Semestre"><select value={semestre} onChange={(event) => setSemestre(event.target.value)}><option value="1">Primero</option><option value="2">Segundo</option></select></Field>
+        {existing && <div className="info-note">Ya existe un período para ese año y semestre. Si tiene una planificación rechazada, se abrirá para corrección.</div>}
+        {error && <div className="form-error">{error}</div>}
+      </div>
+      <ModalActions onClose={onClose} submit="Crear planificación" />
+    </form>
+  </Modal>;
 }
 
 function Planning({
@@ -1414,7 +1631,7 @@ function Planning({
   onPublish?: (plan: Plan) => Promise<void>;
   onAssignmentSave?: (plan: Plan, assignment: Assignment) => Promise<Assignment>;
   onAssignmentRemove?: (plan: Plan, assignment: Assignment) => Promise<void>;
-  onCreatePlan?: () => Promise<Plan>;
+  onCreatePlan?: (input: { nombre: string; anio: number; semestre: number }) => Promise<Plan>;
   cycles: Cycle[];
   periods: Period[];
   sections: Section[];
@@ -1423,9 +1640,21 @@ function Planning({
 }) {
   const [planId, setPlanId] = useState(plans[0]?.id || 0);
   const [statusFilter, setStatusFilter] = useState("");
+  const [newPlanOpen, setNewPlanOpen] = useState(false);
+  const [selectedLoadTeacherId, setSelectedLoadTeacherId] = useState<number | null>(null);
   const [cycleFilter, setCycleFilter] = useState("");
   const [sectionFilter, setSectionFilter] = useState("");
-  const plan = plans.find((p) => p.id === planId) || plans[0];
+  const plan = plans.find((p) => p.id === planId) || plans[0] || {
+    id: 0,
+    name: "Sin planificación",
+    periodId: undefined,
+    year: new Date().getFullYear(),
+    semester: "Primer semestre",
+    sent: "",
+    coordinator: "",
+    status: "Borrador" as PlanStatus,
+    assignments: [],
+  };
   const [modal, setModal] = useState<Assignment | "new" | "section" | null>(null);
   const teacherLoads = useMemo(
     () =>
@@ -1433,7 +1662,7 @@ function Planning({
         .filter((teacher) => teacher.active)
         .map((teacher) => ({
           teacher,
-          courses: Math.max(0, ...["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((day) => new Set(plan.assignments.filter((assignment) => assignment.teacherId === teacher.id && assignment.day === day).map((assignment) => assignment.courseId)).size)),
+          courses: Math.max(0, ...["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((day) => plan.assignments.filter((assignment) => assignment.teacherId === teacher.id && assignment.day === day).length)),
         }))
         .sort((a, b) => a.courses - b.courses),
     [teachers, plan.assignments],
@@ -1467,6 +1696,29 @@ function Planning({
         : "Planificación enviada al Director",
     );
   }
+  function downloadPlanningTable() {
+    const sectionKeys = [...new Set(plan.assignments.map((assignment) => `${assignment.cycleId || assignment.cycle}|${assignment.sectionId || assignment.section}`))].slice(0, 4);
+    const columns = sectionKeys.map((key) => {
+      const assignment = plan.assignments.find((item) => `${item.cycleId || item.cycle}|${item.sectionId || item.section}` === key)!;
+      const section = planSections.find((item) => Number(item.id_seccion) === Number(assignment.sectionId));
+      return { key, title: `Ciclo ${assignment.cycle} · Sección ${assignment.section}`, capacity: section?.cupo_estimado };
+    });
+    const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] || character));
+    const rows = ["07:00", "09:00", "11:00", "14:00", "16:00"].map((time) => `<tr><th>${time}<br>a<br>${{ "07:00": "09:00", "09:00": "11:00", "11:00": "13:00", "14:00": "16:00", "16:00": "18:00" }[time]}</th>${columns.map((column) => {
+      const assignment = plan.assignments.find((item) => `${item.cycleId || item.cycle}|${item.sectionId || item.section}` === column.key && item.start === time);
+      const course = assignment && courses.find((item) => item.id === assignment.courseId);
+      const teacher = assignment && teachers.find((item) => item.id === assignment.teacherId);
+      return `<td>${assignment ? `<b>${escapeHtml(course?.code)}</b><br><strong>${escapeHtml(course?.name)}</strong><br><span class="teacher-name">${escapeHtml(teacher?.name)}${teacher?.code ? ` · Código: ${escapeHtml(teacher.code)}` : ""}</span><br>Salón: ${escapeHtml(assignment.room)}` : ""}</td>`;
+    }).join("")}</tr>`).join("");
+    const printWindow = window.open("", "_blank", "width=1200,height=800");
+    if (!printWindow) { notify("El navegador bloqueó la ventana de descarga"); return; }
+    printWindow.document.write(`<!doctype html><html><head><title>${escapeHtml(plan.name || "Planificación académica")}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#111}h1{text-align:center;font-size:22px;margin:0 0 6px}p{text-align:center;margin:0 0 18px}table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:1px solid #222;padding:8px;vertical-align:top;height:86px}thead th{height:auto;background:#eee;text-align:center}tbody th{width:90px;text-align:center;font-weight:normal}td{font-size:12px}td strong{font-size:14px} @media print{button{display:none}}</style></head><body><h1>${escapeHtml(plan.name || "Planificación académica")}</h1><p>Sábado · ${escapeHtml(plan.semester)} ${escapeHtml(plan.year)}</p><table><thead><tr><th>Horario</th>${columns.map((column) => `<th>${escapeHtml(column.title)}${column.capacity ? `<br>Cupo: ${column.capacity}` : ""}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table><script>window.onload=()=>{window.print();}</script></body></html>`);
+    printWindow.document.body.insertAdjacentHTML("afterbegin", `<header style="display:flex;align-items:center;gap:16px;border-bottom:3px solid #c2a46d;padding-bottom:14px;margin-bottom:18px"><img src="${escapeHtml(umgLogo)}" alt="Universidad Mariano Gálvez" style="width:64px;height:64px;object-fit:cover;border-radius:50%"><div><div style="font-size:20px;font-weight:700;color:#17365d">UNIVERSIDAD MARIANO GÁLVEZ DE GUATEMALA</div><div style="font-size:13px;color:#60748e;margin-top:5px">PROGRAMACIÓN ACADÉMICA · PLAN DE HORARIOS</div></div></header>`);
+    printWindow.document.head.insertAdjacentHTML("beforeend", `<style>tbody td{font-size:13px!important;line-height:1.4!important}tbody td strong{font-size:15px!important;line-height:1.25!important}tbody td .teacher-name{display:inline-block;margin-top:4px;color:#40536b;font-weight:600}tbody td b{font-size:11px!important}</style>`);
+    printWindow.document.head.insertAdjacentHTML("beforeend", `<style>table{border-collapse:separate!important;border-spacing:0!important;border:1px solid #c8d4e2!important;border-radius:10px;overflow:hidden;box-shadow:0 4px 14px rgba(23,54,93,.10)}thead th{background:linear-gradient(135deg,#17365d,#315d88)!important;color:#fff!important;border-bottom:3px solid #c2a46d!important;letter-spacing:.04em;text-transform:uppercase}tbody tr:nth-child(even) td{background:#f7faff}tbody tr:hover td{background:#eef5fd}tbody th{background:#eef3f8!important;color:#17365d!important;font-size:12px!important;border-right:2px solid #cbd7e4!important}tbody td{padding:13px 12px!important;color:#40536b!important}tbody td b{display:inline-block;color:#b0843d;background:#fff7e8;border-radius:5px;padding:3px 6px;font-size:11px}tbody td strong{display:block;color:#17365d;font-size:14px;line-height:1.25;margin:6px 0}tbody td{line-height:1.45}</style>`);
+    printWindow.document.head.insertAdjacentHTML("beforeend", `<style>thead th{background:linear-gradient(135deg,#17365d,#315d88)!important;border-bottom:3px solid #c2a46d!important;letter-spacing:.04em;text-transform:uppercase}tbody tr:nth-child(even) td{background:#f7faff}tbody tr:hover td{background:#eef5fd}tbody td:first-child,tbody td:nth-child(2){color:#17365d;font-weight:700}tbody td:nth-child(3){color:#b0843d;font-weight:700}tbody td{padding:11px 9px!important}</style>`);
+    printWindow.document.close();
+  }
   return (
     <div className="page-stack">
       <div className="page-title planning-title">
@@ -1475,20 +1727,18 @@ function Planning({
           <p>Organice la oferta académica por ciclo, sección y bloque semanal.</p>
         </div>
         <div className="page-actions">
-          {onCreatePlan && (
-            <Button variant="secondary" icon="plus" onClick={() => {
-              void onCreatePlan().then((newPlan) => {
-                setPlans([...plans, newPlan]);
-                setPlanId(newPlan.id);
-                setStatusFilter(newPlan.status);
-                setCycleFilter("");
-                setSectionFilter("");
-                notify(newPlan.status === "Rechazada" ? "Planificación rechazada abierta para corrección" : "Nueva planificación creada como borrador");
-              }).catch((error) => notify(error.message));
-            }}>
-              Nueva planificación
-            </Button>
-          )}
+          {onCreatePlan && <Button variant="secondary" icon="plus" onClick={() => setNewPlanOpen(true)}>Nueva planificación</Button>}
+          <Button variant="secondary" icon="download" onClick={downloadPlanningTable}>Descargar tabla</Button>
+          {onCreatePlan && newPlanOpen && <NewPlanModal periods={periods} onClose={() => setNewPlanOpen(false)} onCreate={async (input) => {
+            const newPlan = await onCreatePlan(input);
+            setPlans([...plans, newPlan]);
+            setPlanId(newPlan.id);
+            setStatusFilter(newPlan.status);
+            setCycleFilter("");
+            setSectionFilter("");
+            setNewPlanOpen(false);
+            notify(newPlan.status === "Rechazada" ? "Planificación rechazada abierta para corrección" : "Nueva planificación creada como borrador");
+          }} />}
           {editable && (
             <>
               <Button variant="secondary" onClick={() => notify("Borrador guardado correctamente")}>
@@ -1567,9 +1817,23 @@ function Planning({
             </div>
           </div>
         </div>
+        {selectedLoadTeacherId && <div className="load-selection-note">Clases resaltadas del catedrático seleccionado</div>}
         <div className="teacher-load-grid">
           {teacherLoads.map(({ teacher, courses: assignedCourses }) => (
-            <div className="teacher-load-item" key={teacher.id}>
+            <div
+              className={`teacher-load-item ${selectedLoadTeacherId === teacher.id ? "selected" : ""}`}
+              key={teacher.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedLoadTeacherId === teacher.id}
+              onClick={() => setSelectedLoadTeacherId((current) => current === teacher.id ? null : teacher.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedLoadTeacherId((current) => current === teacher.id ? null : teacher.id);
+                }
+              }}
+            >
               <div className="teacher-load-avatar">
                 {teacher.name
                   .split(" ")
@@ -1656,6 +1920,7 @@ function Planning({
           courses={courses}
           teachers={teachers}
           sectionCatalog={planSections}
+          highlightTeacherId={selectedLoadTeacherId}
           onEdit={editable ? (a) => setModal(a) : undefined}
         />
       </section>
@@ -1755,18 +2020,42 @@ function AssignmentModal({
     },
   );
   const [error, setError] = useState("");
+  const [teacherSearch, setTeacherSearch] = useState("");
+  const [teacherOpen, setTeacherOpen] = useState(false);
   const selectedCycleId = form.cycleId || cycles.find((cycle) => cycle.numero === form.cycle)?.id_ciclo;
   const coursesForCycle = courses.filter((course) => course.active && (
-    course.cycleIds?.includes(Number(selectedCycleId)) || course.cycleNumbers?.includes(Number(form.cycle)) || course.cycle === form.cycle
+    course.cycleIds?.length ? course.cycleIds.includes(Number(selectedCycleId)) : course.cycleNumbers?.includes(Number(form.cycle)) || course.cycle === form.cycle
   ));
   const sectionsForCycle = sections.filter((section) => Number(section.id_ciclo) === Number(selectedCycleId) && section.estado === "ACTIVA");
+  const otherAssignments = assignments.filter((item) => item.id !== form.id);
+  const teacherOptions = teachers
+    .filter((teacher) => teacher.active)
+    .filter((teacher) => `${teacher.name} ${teacher.code} ${teacher.email}`.toLocaleLowerCase().includes(teacherSearch.trim().toLocaleLowerCase()))
+    .map((teacher) => {
+      const teacherDayAssignments = otherAssignments.filter((item) => item.teacherId === teacher.id && item.day === form.day);
+      const sameBlock = teacherDayAssignments.some((item) => overlaps(item.start, item.end, form.start, form.end));
+      const sameSection = teacherDayAssignments.some((item) => item.cycle === form.cycle && item.section === form.section);
+      const dailyLimit = teacherDayAssignments.length >= 4;
+      const reason = sameBlock ? "conflicto de horario" : dailyLimit ? "límite de 4 clases diarias" : sameSection ? "ya imparte esta sección" : "disponible";
+      return { teacher, available: !sameBlock && !dailyLimit && !sameSection, reason };
+    });
+  const selectedTeacher = teachers.find((teacher) => teacher.id === form.teacherId);
   function submit(e: FormEvent) {
     e.preventDefault();
     setError("");
+    const selectedSection = sectionsForCycle.find((section) => section.nombre === form.section);
+    const selectedCycle = selectedSection
+      ? cycles.find((cycle) => Number(cycle.id_ciclo) === Number(selectedSection.id_ciclo))
+      : undefined;
+    const selectedCourse = courses.find((course) => course.id === form.courseId);
+    if (!selectedSection || !selectedCycle) return setError("Seleccione una sección válida para el ciclo indicado");
+    if (selectedCourse?.cycleIds?.length && !selectedCourse.cycleIds.includes(Number(selectedSection.id_ciclo))) {
+      return setError(`${selectedCourse.code} no pertenece al ${selectedCycle.nombre || `${selectedCycle.numero}° ciclo`}`);
+    }
     const others = assignments.filter((a) => a.id !== form.id);
-    const coursesOnDay = new Set(others.filter((a) => a.teacherId === form.teacherId && a.day === form.day).map((a) => a.courseId));
-    if (coursesOnDay.size >= 4 && !coursesOnDay.has(form.courseId))
-      return setError("El catedrático ya tiene cuatro cursos distintos asignados ese día");
+    const classesOnDay = others.filter((a) => a.teacherId === form.teacherId && a.day === form.day);
+    if (classesOnDay.length >= 4)
+      return setError("El catedrático ya tiene cuatro clases asignadas ese día");
     if (
       others.some(
         (a) =>
@@ -1800,7 +2089,11 @@ function AssignmentModal({
       );
     if (form.start >= form.end)
       return setError("La hora de fin debe ser posterior a la hora de inicio");
-    onSave({ ...form, day: "Sábado", cycle: courses.find((c) => c.id === form.courseId)?.cycle || form.cycle });
+    form.cycle = Number(selectedCycle.numero);
+    form.cycleId = Number(selectedSection.id_ciclo);
+    form.section = selectedSection.nombre;
+    form.sectionId = Number(selectedSection.id_seccion);
+    onSave({ ...form, day: "Sábado" });
   }
   return (
     <Modal
@@ -1830,7 +2123,7 @@ function AssignmentModal({
                   const cycleNumber = +e.target.value;
                   const cycle = cycles.find((item) => item.numero === cycleNumber);
                   const firstCourse = courses.find((course) => course.active && (
-                    course.cycleIds?.includes(Number(cycle?.id_ciclo)) || course.cycleNumbers?.includes(cycleNumber) || course.cycle === cycleNumber
+                    course.cycleIds?.length ? course.cycleIds.includes(Number(cycle?.id_ciclo)) : course.cycleNumbers?.includes(cycleNumber) || course.cycle === cycleNumber
                   ));
                   const firstSection = sections.find((section) => Number(section.id_ciclo) === Number(cycle?.id_ciclo) && section.estado === "ACTIVA");
                   setForm({ ...form, cycle: cycleNumber, cycleId: cycle?.id_ciclo, courseId: firstCourse?.id || 0, section: firstSection?.nombre || "", sectionId: firstSection?.id_seccion });
@@ -1847,8 +2140,9 @@ function AssignmentModal({
               <select
                 value={form.section}
                 onChange={(e) => {
-                  const selected = sections.find((section) => section.nombre === e.target.value && Number(section.id_ciclo) === (form.cycleId || form.cycle));
-                  setForm({ ...form, section: e.target.value, sectionId: selected?.id_seccion });
+                  const selected = sectionsForCycle.find((section) => section.nombre === e.target.value);
+                  const selectedCycle = cycles.find((cycle) => Number(cycle.id_ciclo) === Number(selected?.id_ciclo));
+                  setForm({ ...form, section: e.target.value, sectionId: selected?.id_seccion, cycle: selectedCycle?.numero || form.cycle, cycleId: selectedCycle?.id_ciclo || form.cycleId });
                 }}
               >
                 {sectionsForCycle.map((section) => (
@@ -1874,18 +2168,23 @@ function AssignmentModal({
               </select>
             </Field>
             <Field label="Catedrático" wide>
-              <select
-                value={form.teacherId}
-                onChange={(e) => setForm({ ...form, teacherId: +e.target.value })}
-              >
-                {teachers
-                  .filter((t) => t.active)
-                  .map((t) => (
-                    <option value={t.id} key={t.id}>
-                      {t.name}
-                    </option>
+              <div className="teacher-picker" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setTeacherOpen(false); }}>
+                <input
+                  value={teacherOpen ? teacherSearch : (selectedTeacher ? `${selectedTeacher.name} · ${selectedTeacher.code}` : teacherSearch)}
+                  onFocus={() => { setTeacherSearch(""); setTeacherOpen(true); }}
+                  onChange={(e) => { setTeacherSearch(e.target.value); setTeacherOpen(true); }}
+                  placeholder="Buscar por nombre, código o correo"
+                  aria-label="Buscar catedrático"
+                />
+                {teacherOpen && <div className="teacher-options">
+                  {teacherOptions.length === 0 && <span className="teacher-empty">Sin coincidencias</span>}
+                  {teacherOptions.map(({ teacher, available, reason }) => (
+                    <button type="button" className="teacher-option" key={teacher.id} disabled={!available && teacher.id !== form.teacherId} onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, teacherId: teacher.id }); setTeacherSearch(""); setTeacherOpen(false); }}>
+                      <span><strong>{teacher.name}</strong><small>{teacher.code} · {reason}</small></span><i className={available ? "available" : "unavailable"}>{available ? "Disponible" : "No disponible"}</i>
+                    </button>
                   ))}
-              </select>
+                </div>}
+              </div>
             </Field>
             <Field label="Salón">
               <select
@@ -1896,7 +2195,7 @@ function AssignmentModal({
                 }}
               >
                 {rooms.filter((room) => room.estado === "DISPONIBLE").map((room) => (
-                  <option value={room.codigo} key={room.id_salon}>{room.codigo}</option>
+                  <option value={room.codigo} key={room.id_salon}>{room.codigo} · Capacidad: {room.capacidad}</option>
                 ))}
               </select>
             </Field>
@@ -2001,6 +2300,7 @@ function Schedule({
   courses,
   teachers = [],
   sectionCatalog = [],
+  highlightTeacherId = null,
   compact = false,
   onEdit,
 }: {
@@ -2008,6 +2308,7 @@ function Schedule({
   courses: Course[];
   teachers?: Teacher[];
   sectionCatalog?: Section[];
+  highlightTeacherId?: number | null;
   compact?: boolean;
   onEdit?: (a: Assignment) => void;
 }) {
@@ -2042,7 +2343,7 @@ function Schedule({
               return (
                 <div className="schedule-cell" key={column.key + time}>
                   {a && (
-                    <button className={`class-block c${a.cycle % 4}`} onClick={() => onEdit?.(a)}>
+                    <button className={`class-block c${a.cycle % 4} ${highlightTeacherId ? (a.teacherId === highlightTeacherId ? "teacher-highlight" : "teacher-muted") : ""}`} onClick={() => onEdit?.(a)}>
                       <strong>{c?.code}</strong>
                       <span>{c?.name}</span>
                       <small>
@@ -2383,6 +2684,21 @@ function MyCourses({ assignments, courses, teacherId, periodLabel }: { assignmen
   );
 }
 
+function CatalogPicker({ options, value, placeholder, onChange }: { options: { value: string; label: string; search?: string }[]; value: string; placeholder: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selected = options.find((option) => option.value === value);
+  const matches = options.filter((option) => `${option.label} ${option.search || ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  return <div className="catalog-picker" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
+    <input value={open ? query : (selected?.label || "")} placeholder={placeholder} onFocus={() => { setQuery(""); setOpen(true); }} onChange={(event) => { setQuery(event.target.value); setOpen(true); }} />
+    {open && <div className="catalog-options">
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(""); setOpen(false); setQuery(""); }}>Todos</button>
+      {matches.map((option) => <button type="button" key={option.value} onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(option.value); setOpen(false); setQuery(""); }}>{option.label}</button>)}
+      {matches.length === 0 && <span>Sin coincidencias</span>}
+    </div>}
+  </div>;
+}
+
 function Reports({
   role,
   plan,
@@ -2404,13 +2720,20 @@ function Reports({
   cycles: Cycle[];
   periods: Period[];
   sections: Section[];
-  onQuery: (filters: { periodId?: string; cycleId?: string; sectionId?: string }) => Promise<Assignment[]>;
+  onQuery: (filters: { periodId?: string; cycleId?: string; sectionId?: string; teacherId?: string; courseId?: string; year?: string; semester?: string }) => Promise<Assignment[]>;
 }) {
-  const [periodId, setPeriodId] = useState(String(plan.periodId || ""));
+  const [periodId, setPeriodId] = useState("");
   const [cycleId, setCycleId] = useState("");
   const [sectionId, setSectionId] = useState("");
+  const [reportTeacherId, setReportTeacherId] = useState("");
+  const [reportCourseId, setReportCourseId] = useState("");
+  const [yearFilter, setYearFilter] = useState("");
+  const [semesterFilter, setSemesterFilter] = useState("");
   const [reportAssignments, setReportAssignments] = useState<Assignment[]>(plan.assignments);
   const selectedPeriod = periods.find((period) => Number(period.id_periodo) === Number(periodId));
+  const reportPeriodLabel = yearFilter || semesterFilter
+    ? `${yearFilter || "Todos los años"}${semesterFilter ? ` · ${semesterFilter === "1" ? "Primero" : "Segundo"}` : ""}`
+    : "Todos los períodos";
   const rows = reportAssignments.filter((assignment) =>
     (role !== "teacher" || !teacherId || assignment.teacherId === teacherId) &&
     (!cycleId || assignment.cycleId === Number(cycleId) || assignment.cycle === Number(cycleId)) &&
@@ -2420,6 +2743,47 @@ function Reports({
   const reportSectionNames = [...new Set(reportSections.map((section) => section.nombre))].sort();
   const reportYears = [...new Set(periods.map((period) => period.anio))].sort((a, b) => b - a);
   const reportSemesters = [...new Set(periods.map((period) => period.semestre))].sort();
+  function downloadSchedulePdf() {
+    const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] || character));
+    if (role !== "teacher") {
+      const printWindow = window.open("", "_blank", "width=1280,height=900");
+      if (!printWindow) { notify("El navegador bloqueó la ventana de descarga"); return; }
+      const listRows = rows.map((assignment) => {
+        const course = courses.find((item) => item.id === assignment.courseId);
+        const teacher = teachers.find((item) => item.id === assignment.teacherId);
+        return `<tr><td>${escapeHtml(assignment.planName || "Sin nombre")}</td><td>${escapeHtml(assignment.cycle)}° · ${escapeHtml(assignment.section)}</td><td><b>${escapeHtml(course?.code)}</b><br>${escapeHtml(course?.name)}</td><td>${escapeHtml(teacher?.name)}<br><small>${escapeHtml(teacher?.code)}</small></td><td>${escapeHtml(assignment.day)}</td><td>${escapeHtml(assignment.start)} – ${escapeHtml(assignment.end)}</td><td>${escapeHtml(assignment.room)}</td></tr>`;
+      }).join("");
+      printWindow.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte académico - ${escapeHtml(reportPeriodLabel)}</title><style>*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#172b4d;margin:0;padding:28px}header{display:flex;align-items:center;gap:16px;border-bottom:3px solid #c2a46d;padding-bottom:14px;margin-bottom:18px}header img{width:64px;height:64px;object-fit:cover;border-radius:50%}h1{font-size:20px;margin:0 0 5px;color:#17365d}h2{font-size:13px;font-weight:500;color:#60748e;margin:0}.meta{display:flex;justify-content:space-between;margin-bottom:16px;color:#60748e;font-size:11px}.meta strong{color:#17365d;font-size:13px}table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}th,td{padding:9px 8px;border-right:1px solid #d7dee8;border-bottom:1px solid #d7dee8;text-align:left;vertical-align:top;font-size:10px}th:last-child,td:last-child{border-right:0}tr:last-child td{border-bottom:0}thead th{background:linear-gradient(135deg,#17365d,#315d88);color:#fff;text-transform:uppercase;font-size:9px;letter-spacing:.04em}tbody tr:nth-child(even) td{background:#f7faff}td b{color:#b0843d}td small{color:#60748e}footer{display:flex;justify-content:space-between;margin-top:14px;color:#8290a3;font-size:10px}@page{size:landscape;margin:12mm}</style></head><body><header><img src="${escapeHtml(umgLogo)}" alt="Universidad Mariano Gálvez"><div><h1>UNIVERSIDAD MARIANO GÁLVEZ DE GUATEMALA</h1><h2>REPORTE DE ASIGNACIONES ACADÉMICAS</h2></div></header><div class="meta"><span><strong>${escapeHtml(reportPeriodLabel)}</strong><br>Listado de cursos, catedráticos y horarios</span><span>Generado: ${escapeHtml(new Date().toLocaleDateString("es-GT"))}</span></div><table><thead><tr><th>Planificación</th><th>Ciclo · Sección</th><th>Curso</th><th>Catedrático</th><th>Día</th><th>Horario</th><th>Salón</th></tr></thead><tbody>${listRows || `<tr><td colspan="7">No hay asignaciones para los filtros seleccionados.</td></tr>`}</tbody></table><footer><span>${rows.length} asignaciones</span><span>Sistema de Planificación de Cursos</span></footer></body></html>`);
+      printWindow.document.close();
+      printWindow.setTimeout(() => printWindow.print(), 300);
+      return;
+    }
+    const timeBlocks = [
+      ["07:00", "09:00"],
+      ["09:00", "11:00"],
+      ["11:00", "13:00"],
+      ["14:00", "16:00"],
+      ["16:00", "18:00"],
+    ];
+    const sectionKeys = [...new Set(rows.map((assignment) => `${assignment.cycleId || assignment.cycle}|${assignment.sectionId || assignment.section}`))].slice(0, 4);
+    const columns = sectionKeys.map((key) => {
+      const assignment = rows.find((item) => `${item.cycleId || item.cycle}|${item.sectionId || item.section}` === key)!;
+      return { key, title: `Ciclo ${assignment.cycle} · Sección ${assignment.section}` };
+    });
+    const body = timeBlocks.map(([start, end]) => `<tr><th class="time"><span>${start}</span><small>a</small><span>${end}</span></th>${columns.map((column) => {
+      const assignment = rows.find((item) => `${item.cycleId || item.cycle}|${item.sectionId || item.section}` === column.key && item.start === start);
+      const course = assignment && courses.find((item) => item.id === assignment.courseId);
+      const teacher = assignment && teachers.find((item) => item.id === assignment.teacherId);
+      return `<td>${assignment ? `<span class="code">${escapeHtml(course?.code)}</span><strong>${escapeHtml(course?.name)}</strong><span>${escapeHtml(teacher?.name)}${teacher?.code ? ` · Código: ${escapeHtml(teacher.code)}` : ""}</span><span>Plan: ${escapeHtml(assignment.planName || "Sin nombre")}</span><span>Salón ${escapeHtml(assignment.room)}</span>` : ""}</td>`;
+    }).join("")}</tr>`).join("");
+    const periodTitle = selectedPeriod ? `${selectedPeriod.semestre === 1 ? "Primer" : "Segundo"} semestre ${selectedPeriod.anio}` : reportPeriodLabel;
+    const printWindow = window.open("", "_blank", "width=1280,height=900");
+    if (!printWindow) { notify("El navegador bloqueó la ventana de descarga"); return; }
+    printWindow.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(role === "teacher" ? "Mi horario" : "Planificación académica")} - ${escapeHtml(periodTitle)}</title><style>
+      :root{color-scheme:light}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#172b4d;margin:0;padding:28px;background:#fff}header{display:flex;align-items:center;gap:18px;border-bottom:3px solid #c2a46d;padding-bottom:16px;margin-bottom:20px}header img{width:64px;height:64px;object-fit:cover;border-radius:50%}header div{flex:1}h1{font-size:21px;margin:0 0 5px;letter-spacing:.2px}h2{font-size:14px;color:#64748b;font-weight:500;margin:0}.meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;color:#60748e;font-size:11px}.meta strong{color:#17365d;font-size:13px}table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden}th,td{border-right:1px solid #d7dee8;border-bottom:1px solid #d7dee8;padding:10px;vertical-align:top}tr:last-child th,tr:last-child td{border-bottom:0}th:last-child,td:last-child{border-right:0}thead th{background:#17365d;color:#fff;text-align:center;font-size:11px;padding:12px 8px}.time{width:92px;background:#f4f7fb;text-align:center;font-weight:700;color:#17365d}.time span,.time small{display:block}.time small{font-size:10px;color:#8b98a9;margin:4px 0}tbody td{height:102px;background:#fff;font-size:11px;line-height:1.35}tbody tr:nth-child(even) td{background:#fbfcfe}td strong,td span{display:block}td strong{font-size:13px;color:#17365d;margin:4px 0}.code{font-weight:700;color:#b0843d;font-size:11px}td span:last-child{color:#64748b;margin-top:6px}.empty{padding:28px;text-align:center;color:#64748b}footer{display:flex;justify-content:space-between;margin-top:14px;color:#8290a3;font-size:10px}@page{size:landscape;margin:12mm}@media print{body{padding:0}button{display:none}}
+    </style></head><body><header><img src="${escapeHtml(umgLogo)}" alt="Universidad Mariano Gálvez"><div><h1>UNIVERSIDAD MARIANO GÁLVEZ DE GUATEMALA</h1><h2>${escapeHtml(role === "teacher" ? "HORARIO DEL CATEDRÁTICO" : "PROGRAMACIÓN ACADÉMICA")}</h2></div></header><div class="meta"><span><strong>${escapeHtml(periodTitle)}</strong><br>Sábado · Bloques institucionales de 07:00 a 18:00</span><span>Generado: ${escapeHtml(new Date().toLocaleDateString("es-GT"))}</span></div>${columns.length ? `<table><thead><tr><th>HORARIO</th>${columns.map((column) => `<th>${escapeHtml(column.title)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>` : '<div class="empty">No hay asignaciones para los filtros seleccionados.</div>'}<footer><span>${rows.length} asignaciones</span><span>Documento generado por el Sistema de Planificación de Cursos</span></footer><script>window.onload=()=>{window.print();}</script></body></html>`);
+    printWindow.document.close();
+  }
   return (
     <div className="page-stack">
       <div className="page-title">
@@ -2429,48 +2793,41 @@ function Reports({
         </div>
         <div className="page-actions">
           <Button variant="secondary" icon="printer" onClick={() => window.print()}>
-            Imprimir
+            Vista de impresión
           </Button>
-          {role !== "teacher" && (
-            <Button
-              icon="download"
-              onClick={() => notify("El reporte PDF se generó correctamente (simulación)")}
-            >
-              Exportar PDF
-            </Button>
-          )}
+          <Button icon="download" onClick={downloadSchedulePdf}>
+            {role === "teacher" ? "Descargar horario" : "Descargar reporte"}
+          </Button>
         </div>
       </div>
       <section className="panel report-filters">
         <Field label="Año">
-          <select value={selectedPeriod?.anio || ""} onChange={(e) => {
-            const next = periods.filter((period) => Number(period.anio) === Number(e.target.value)).sort((a, b) => b.semestre - a.semestre)[0];
-            if (next) setPeriodId(String(next.id_periodo));
-          }}>
+          <select value={yearFilter} onChange={(e) => { setYearFilter(e.target.value); setPeriodId(""); setReportAssignments([]); }}>
+            <option value="">Todos</option>
             {reportYears.map((year) => <option key={year} value={year}>{year}</option>)}
           </select>
         </Field>
         <Field label="Semestre">
-          <select value={selectedPeriod?.semestre || ""} onChange={(e) => {
-            const next = periods.find((period) => Number(period.anio) === Number(selectedPeriod?.anio) && Number(period.semestre) === Number(e.target.value));
-            if (next) setPeriodId(String(next.id_periodo));
-          }}>
+          <select value={semesterFilter} onChange={(e) => { setSemesterFilter(e.target.value); setPeriodId(""); setReportAssignments([]); }}>
+            <option value="">Todos</option>
             {reportSemesters.map((semester) => <option key={semester} value={semester}>{semester === 1 ? "Primero" : "Segundo"}</option>)}
           </select>
         </Field>
         <Field label="Ciclo">
-          <select value={cycleId} onChange={(e) => { setCycleId(e.target.value); setSectionId(""); }}>
+          <select value={cycleId} onChange={(e) => { setCycleId(e.target.value); setSectionId(""); setReportAssignments([]); }}>
             <option>Todos</option>
             {cycles.filter((cycle) => cycle.activo).map((cycle) => <option key={cycle.id_ciclo} value={cycle.id_ciclo}>{cycle.numero}° ciclo</option>)}
           </select>
         </Field>
         <Field label="Sección">
-          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)}>
+          <select value={sectionId} onChange={(e) => { setSectionId(e.target.value); setReportAssignments([]); }}>
             <option value="">Todas</option>
             {reportSectionNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </Field>
-        <Button onClick={() => void onQuery({ periodId, cycleId, sectionId }).then((result) => {
+        {role !== "teacher" && <Field label="Catedrático"><CatalogPicker value={reportTeacherId} placeholder="Buscar catedrático..." onChange={(value) => { setReportTeacherId(value); setReportAssignments([]); }} options={teachers.filter((teacher) => teacher.active).sort((a, b) => a.name.localeCompare(b.name)).map((teacher) => ({ value: String(teacher.id), label: `${teacher.name} · ${teacher.code}`, search: `${teacher.name} ${teacher.code} ${teacher.email}` }))} /></Field>}
+        {role !== "teacher" && <Field label="Curso"><CatalogPicker value={reportCourseId} placeholder="Buscar curso..." onChange={(value) => { setReportCourseId(value); setReportAssignments([]); }} options={courses.filter((course) => course.active).sort((a, b) => a.code.localeCompare(b.code)).map((course) => ({ value: String(course.id), label: `${course.code} · ${course.name}`, search: `${course.code} ${course.name}` }))} /></Field>}
+        <Button onClick={() => void onQuery({ periodId, cycleId, sectionId, teacherId: reportTeacherId, courseId: reportCourseId, year: yearFilter, semester: semesterFilter }).then((result) => {
           setReportAssignments(result);
           notify("Reporte actualizado");
         }).catch((error) => notify(error.message))}>Consultar</Button>
@@ -2489,8 +2846,14 @@ function Reports({
           </div>
           <Badge status={plan.published ? "Publicada" : plan.status} />
         </div>
+        <div className="report-summary">
+          <div><span>Período</span><strong>{selectedPeriod ? `${selectedPeriod.semestre === 1 ? "Primer" : "Segundo"} semestre ${selectedPeriod.anio}` : reportPeriodLabel}</strong></div>
+          <div><span>Asignaciones</span><strong>{rows.length}</strong></div>
+          <div><span>Secciones</span><strong>{new Set(rows.map((row) => `${row.cycle}-${row.section}`)).size}</strong></div>
+          <div><span>Jornada</span><strong>Sábado · 07:00–18:00</strong></div>
+        </div>
         <div className="table-wrap">
-          <table>
+          <table className="report-table">
             <thead>
               <tr>
                 <th>Ciclo</th>
@@ -2502,10 +2865,11 @@ function Reports({
                 <th>Inicio</th>
                 <th>Fin</th>
                 <th>Salón</th>
+                <th>Planificación</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => {
+              {rows.length === 0 ? <tr><td className="report-empty" colSpan={10}>No hay asignaciones para los filtros seleccionados.</td></tr> : rows.map((a) => {
                 const c = courses.find((x) => x.id === a.courseId);
                 return (
                   <tr key={a.id}>
@@ -2515,11 +2879,12 @@ function Reports({
                     </td>
                     <td>{c?.code}</td>
                     <td>{c?.name}</td>
-                    <td>{teachers.find((t) => t.id === a.teacherId)?.name}</td>
+                    <td>{(() => { const teacher = teachers.find((t) => t.id === a.teacherId); return teacher ? `${teacher.name} · ${teacher.code}` : ""; })()}</td>
                     <td>{a.day}</td>
                     <td>{a.start}</td>
                     <td>{a.end}</td>
                     <td>{a.room}</td>
+                    <td>{a.planName || "Sin nombre"}</td>
                   </tr>
                 );
               })}
@@ -2531,6 +2896,76 @@ function Reports({
           <span>Documento de consulta académica</span>
         </div>
       </section>
+    </div>
+  );
+}
+
+function UsersAndTeachers({
+  teachers,
+  setTeachers,
+  users,
+  notify,
+  onPersistTeacher,
+  onToggleTeacher,
+  onChangePassword,
+}: {
+  teachers: Teacher[];
+  setTeachers: (value: Teacher[]) => void;
+  users: ManagedUser[];
+  notify: (message: string) => void;
+  onPersistTeacher: (teacher: Teacher) => Promise<Teacher>;
+  onToggleTeacher: (teacher: Teacher) => Promise<Teacher>;
+  onChangePassword: (id: number, password: string) => Promise<void>;
+}) {
+  const [tab, setTab] = useState<"teachers" | "users">("teachers");
+  return (
+    <div className="page-stack unified-admin">
+      <div className="page-title">
+        <div><h2>Usuarios y catedráticos</h2><p>Administre perfiles docentes, accesos y contraseñas desde un solo módulo.</p></div>
+      </div>
+      <div className="admin-tabs" role="tablist" aria-label="Administración académica">
+        <button className={tab === "teachers" ? "active" : ""} onClick={() => setTab("teachers")} role="tab" aria-selected={tab === "teachers"}>Catedráticos</button>
+        <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")} role="tab" aria-selected={tab === "users"}>Usuarios y contraseñas</button>
+      </div>
+      {tab === "teachers" ? <Teachers teachers={teachers} setTeachers={setTeachers} notify={notify} onPersist={onPersistTeacher} onToggle={onToggleTeacher} /> : <Users users={users} onChangePassword={onChangePassword} notify={notify} />}
+    </div>
+  );
+}
+
+function Users({ users, onChangePassword, notify }: { users: ManagedUser[]; onChangePassword: (id: number, password: string) => Promise<void>; notify: (message: string) => void }) {
+  const [selected, setSelected] = useState<ManagedUser | null>(null);
+  const [search, setSearch] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [requests, setRequests] = useState<RecoveryRequest[]>([]);
+  useEffect(() => { api<RecoveryRequest[]>("/recuperacion?estado=PENDIENTE").then(setRequests).catch(() => undefined); }, []);
+  const filteredUsers = users.filter((user) => `${user.nombre_completo} ${user.correo} ${user.rol}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  return (
+    <div className="page-stack">
+      <div className="page-title">
+        <div><h2>Administración de usuarios</h2><p>Gestione el acceso de catedráticos y personal académico.</p></div>
+      </div>
+      <section className="panel">
+        <div className="toolbar users-toolbar">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, correo o rol..." aria-label="Buscar usuarios" />
+          <span className="record-count">{filteredUsers.length} de {users.length} usuarios</span>
+        </div>
+        <div className="table-wrap"><table><thead><tr><th>Usuario</th><th>Correo</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <tbody>{filteredUsers.length === 0 ? <tr><td colSpan={5} className="report-empty">No se encontraron usuarios.</td></tr> : filteredUsers.map((user) => <tr key={user.id_usuario}><td>{user.nombre_completo}</td><td>{user.correo}</td><td>{user.rol}</td><td><Badge status={user.activo ? "Activo" : "Inactivo"} /></td><td><Button variant="secondary" onClick={() => { setSelected(user); setPassword(""); setError(""); }}>Cambiar contraseña</Button></td></tr>)}</tbody>
+        </table></div>
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h3>Solicitudes de contraseña olvidada</h3><p>Solicitudes recibidas desde el inicio de sesión.</p></div></div>
+        <div className="table-wrap"><table><thead><tr><th>Correo</th><th>Mensaje</th><th>Fecha</th><th>Acción</th></tr></thead><tbody>
+          {requests.map((request) => <tr key={request.id_solicitud}><td>{request.correo}</td><td>{request.mensaje}</td><td>{new Date(request.fecha_solicitud).toLocaleString("es-GT")}</td><td><Button variant="secondary" onClick={() => void apiJson(`/recuperacion/${request.id_solicitud}/atender`, {}, "PATCH").then(() => { setRequests(requests.filter((item) => item.id_solicitud !== request.id_solicitud)); notify("Solicitud marcada como atendida"); }).catch((reason) => notify(reason.message))}>Marcar atendida</Button></td></tr>)}
+        </tbody></table></div>
+      </section>
+      {selected && <Modal title="Cambiar contraseña" subtitle={`Usuario: ${selected.correo}`} onClose={() => setSelected(null)}>
+        <form onSubmit={(event) => { event.preventDefault(); if (password.length < 8) { setError("La contraseña debe tener al menos ocho caracteres"); return; } void onChangePassword(selected.id_usuario, password).then(() => { setSelected(null); notify("Contraseña actualizada correctamente"); }).catch((reason) => setError(reason.message)); }}>
+          <div className="modal-body"><Field label="Nueva contraseña"><input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></Field>{error && <div className="form-error">{error}</div>}</div>
+          <ModalActions onClose={() => setSelected(null)} submit="Guardar contraseña" />
+        </form>
+      </Modal>}
     </div>
   );
 }

@@ -6,7 +6,7 @@
 | `usuarios` | Cuentas institucionales | `id_usuario`, `id_rol`, `nombre_completo`, `correo`, `password_hash`, `activo` |
 | `catedraticos` | Docentes que pueden impartir cursos | `id_catedratico`, `id_usuario`, `codigo`, `nombre_completo`, `correo`, `activo` |
 | `ciclos` | Ciclos académicos | `id_ciclo`, `numero`, `nombre`, `activo` |
-| `cursos` | Catálogo de cursos | `id_curso`, `codigo`, `nombre`, `descripcion`, `activo` |
+| `cursos` | Catálogo de cursos | `id_curso`, `codigo`, `nombre`, `descripcion`, `activo`, `tiene_laboratorio`, `costo_laboratorio` |
 | `pensum` | Relación curso-ciclo | `id_curso`, `id_ciclo`, `obligatorio` |
 | `periodos_academicos` | Semestres planificables | `id_periodo`, `anio`, `semestre`, `fecha_inicio`, `fecha_fin`, `estado` |
 | `secciones` | Grupos por período y ciclo | `id_seccion`, `id_periodo`, `id_ciclo`, `nombre`, `cupo_estimado`, `estado` |
@@ -19,6 +19,8 @@
 ## Restricciones relevantes
 
 - `codigo` es único para cursos, catedráticos y salones.
+- `cursos.tiene_laboratorio` es obligatorio y por defecto `false`.
+- `cursos.costo_laboratorio` es opcional y no puede ser negativo.
 - `(anio, semestre)` es único para períodos.
 - `(id_periodo, id_ciclo, nombre)` es único para secciones.
 - Solo existe una planificación por período.

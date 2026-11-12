@@ -39,6 +39,21 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const bodyRequired = (body, fields) => {
   for (const field of fields) if (body[field] === undefined || body[field] === null || body[field] === "") throw httpError(400, `Falta el campo ${field}`);
 };
+const booleanField = (value, name) => {
+  if (value === true || value === false) return value;
+  if (value === "true" || value === "1" || value === 1) return true;
+  if (value === "false" || value === "0" || value === 0) return false;
+  throw httpError(400, `${name} debe ser booleano`);
+};
+const courseFields = (body) => {
+  const tieneLaboratorio = booleanField(body.tiene_laboratorio ?? false, "tiene_laboratorio");
+  const rawCost = body.costo_laboratorio;
+  const costoLaboratorio = rawCost === undefined || rawCost === null || rawCost === "" ? null : Number(rawCost);
+  if (costoLaboratorio !== null && (!Number.isFinite(costoLaboratorio) || costoLaboratorio < 0)) {
+    throw httpError(400, "costo_laboratorio debe ser un número mayor o igual a cero");
+  }
+  return { tieneLaboratorio, costoLaboratorio };
+};
 const WORKDAY_START = "07:00";
 const WORKDAY_END = "18:00";
 const CLASS_BLOCKS = new Set(["07:00-09:00", "09:00-11:00", "11:00-13:00", "14:00-16:00", "16:00-18:00"]);
@@ -59,6 +74,40 @@ const validateWorkdayBlock = (block) => {
   }
 };
 const currentUser = (req) => req.session.user;
+async function notifyUser(client, userId, tipo, titulo, mensaje, planId = null) {
+  if (!userId) return;
+  await client.query(`INSERT INTO notificaciones (id_usuario, tipo, titulo, mensaje, id_planificacion)
+    VALUES ($1, $2, $3, $4, $5)`, [userId, tipo, titulo, mensaje, planId]);
+}
+
+async function provisionTeacherUsers() {
+  const passwordHash = await bcrypt.hash("Demo123", 10);
+  const result = await withTransaction(async (client) => {
+    const role = await client.query("SELECT id_rol FROM roles WHERE nombre = 'CATEDRATICO'");
+    if (!role.rowCount) throw new Error("No existe el rol CATEDRATICO");
+    const teachers = await client.query("SELECT id_catedratico, codigo, nombre_completo, correo FROM catedraticos WHERE id_usuario IS NULL FOR UPDATE");
+    let linked = 0;
+    for (const teacher of teachers.rows) {
+      const baseEmail = String(teacher.correo || `${teacher.codigo.toLowerCase()}@universidad.edu.gt`).trim().toLowerCase();
+      let email = baseEmail;
+      let existing = await client.query("SELECT u.id_usuario, r.nombre AS rol FROM usuarios u JOIN roles r USING (id_rol) WHERE lower(u.correo) = lower($1)", [email]);
+      if (existing.rowCount && existing.rows[0].rol !== "CATEDRATICO") {
+        email = `${teacher.codigo.toLowerCase()}@universidad.edu.gt`;
+        existing = await client.query("SELECT u.id_usuario, r.nombre AS rol FROM usuarios u JOIN roles r USING (id_rol) WHERE lower(u.correo) = lower($1)", [email]);
+      }
+      let userId = existing.rows[0]?.id_usuario;
+      if (!userId) {
+        const inserted = await client.query(`INSERT INTO usuarios (id_rol, nombre_completo, correo, password_hash)
+          VALUES ($1, $2, $3, $4) RETURNING id_usuario`, [role.rows[0].id_rol, teacher.nombre_completo, email, passwordHash]);
+        userId = inserted.rows[0].id_usuario;
+      }
+      await client.query("UPDATE catedraticos SET id_usuario = $1 WHERE id_catedratico = $2", [userId, teacher.id_catedratico]);
+      linked += 1;
+    }
+    return linked;
+  });
+  if (result) console.log(`${result} usuario(s) de catedrático vinculado(s)`);
+}
 
 function requireAuth(req, res, next) {
   if (!currentUser(req)) return res.status(401).json({ error: "Autenticación requerida" });
@@ -90,7 +139,8 @@ app.get("/api/health/db", asyncRoute(databaseHealth));
 app.get("/api/periodo-actual", asyncRoute(async (_req, res) => {
   const result = await query(`SELECT anio, semestre
     FROM periodos_academicos
-    ORDER BY CASE WHEN anio = 2026 AND semestre = 2 THEN 0 ELSE 1 END, anio DESC, semestre DESC
+    WHERE fecha_inicio <= CURRENT_DATE
+    ORDER BY fecha_inicio DESC
     LIMIT 1`);
   if (!result.rowCount) return res.json({ anio: 2026, semestre: 2 });
   res.json(result.rows[0]);
@@ -112,6 +162,17 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
   res.json({ user: req.session.user });
 }));
 
+const createRecoveryRequest = asyncRoute(async (req, res) => {
+  bodyRequired(req.body, ["correo"]);
+  const correo = String(req.body.correo).trim().toLowerCase();
+  const user = await query("SELECT id_usuario FROM usuarios WHERE lower(correo) = $1 AND activo = true", [correo]);
+  await query(`INSERT INTO solicitudes_recuperacion (id_usuario, correo, mensaje)
+    VALUES ($1, $2, $3)`, [user.rows[0]?.id_usuario || null, correo, String(req.body.mensaje || "Solicitud de cambio de contraseña").trim()]);
+  res.status(201).json({ received: true, message: "Solicitud enviada al coordinador" });
+});
+app.post("/api/auth/forgot-password", createRecoveryRequest);
+app.post("/api/recuperacion", createRecoveryRequest);
+
 app.post("/api/auth/logout", (req, res) => req.session.destroy((error) => {
   if (error) return res.status(500).json({ error: "No se pudo cerrar la sesión" });
   res.clearCookie("planificacion.sid");
@@ -120,7 +181,7 @@ app.post("/api/auth/logout", (req, res) => req.session.destroy((error) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => res.json({ user: currentUser(req) }));
 
-app.get("/api/usuarios", requireRole("DIRECTOR"), asyncRoute(async (req, res) => {
+app.get("/api/usuarios", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
   const params = [req.query.rol || ""];
   const result = await query(`
     SELECT u.id_usuario, u.nombre_completo, u.correo, u.activo, u.fecha_creacion, r.id_rol, r.nombre AS rol
@@ -131,11 +192,90 @@ app.get("/api/usuarios", requireRole("DIRECTOR"), asyncRoute(async (req, res) =>
   res.json(result.rows);
 }));
 
-app.patch("/api/usuarios/:id/estado", requireRole("DIRECTOR"), asyncRoute(async (req, res) => {
+app.patch("/api/usuarios/:id/estado", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["activo"]);
   const result = await query("UPDATE usuarios SET activo = $1 WHERE id_usuario = $2 RETURNING id_usuario, nombre_completo, correo, activo", [Boolean(req.body.activo), id(req.params.id, "id_usuario")]);
   if (!result.rowCount) throw httpError(404, "Usuario no encontrado");
   res.json(result.rows[0]);
+}));
+app.patch("/api/usuarios/:id/password", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
+  bodyRequired(req.body, ["password"]);
+  if (String(req.body.password).length < 8) throw httpError(400, "La contraseña debe tener al menos ocho caracteres");
+  const passwordHash = await bcrypt.hash(String(req.body.password), 10);
+  const result = await query("UPDATE usuarios SET password_hash = $1 WHERE id_usuario = $2 RETURNING id_usuario, correo", [passwordHash, id(req.params.id, "id_usuario")]);
+  if (!result.rowCount) throw httpError(404, "Usuario no encontrado");
+  res.json({ id_usuario: result.rows[0].id_usuario, correo: result.rows[0].correo, updated: true });
+}));
+app.get("/api/solicitudes-recuperacion", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (_req, res) => {
+  const result = await query(`SELECT s.id_solicitud, s.id_usuario, s.correo, s.mensaje, s.estado,
+      s.fecha_solicitud, s.fecha_atencion, s.id_coordinador, u.nombre_completo
+    FROM solicitudes_recuperacion s LEFT JOIN usuarios u ON u.id_usuario = s.id_usuario
+    ORDER BY CASE WHEN s.estado = 'PENDIENTE' THEN 0 ELSE 1 END, s.fecha_solicitud DESC`);
+  res.json(result.rows);
+}));
+app.patch("/api/solicitudes-recuperacion/:id/atender", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
+  const result = await query(`UPDATE solicitudes_recuperacion
+    SET estado = 'ATENDIDA', fecha_atencion = now(), id_coordinador = $1
+    WHERE id_solicitud = $2 AND estado = 'PENDIENTE'
+    RETURNING id_solicitud, estado, fecha_atencion`, [currentUser(req).id_usuario, id(req.params.id, "id_solicitud")]);
+  if (!result.rowCount) throw httpError(404, "Solicitud no encontrada o ya atendida");
+  res.json(result.rows[0]);
+}));
+app.get("/api/recuperacion", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
+  const result = await query(`SELECT s.*, u.nombre_completo
+    FROM solicitudes_recuperacion s LEFT JOIN usuarios u ON u.id_usuario = s.id_usuario
+    WHERE ($1 = '' OR s.estado = $1)
+    ORDER BY s.fecha_solicitud DESC`, [req.query.estado || ""]);
+  res.json(result.rows);
+}));
+app.patch("/api/recuperacion/:id/atender", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
+  const result = await query(`UPDATE solicitudes_recuperacion SET estado = 'ATENDIDA', fecha_atencion = now(), id_coordinador = $1
+    WHERE id_solicitud = $2 AND estado = 'PENDIENTE' RETURNING *`, [currentUser(req).id_usuario, id(req.params.id, "id_solicitud")]);
+  if (!result.rowCount) throw httpError(404, "Solicitud no encontrada o ya atendida");
+  res.json(result.rows[0]);
+}));
+app.patch("/api/recuperacion/:id/cancelar", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
+  const result = await query("UPDATE solicitudes_recuperacion SET estado = 'CANCELADA', fecha_atencion = now(), id_coordinador = $1 WHERE id_solicitud = $2 AND estado = 'PENDIENTE' RETURNING *", [currentUser(req).id_usuario, id(req.params.id, "id_solicitud")]);
+  if (!result.rowCount) throw httpError(404, "Solicitud no encontrada o ya atendida");
+  res.json(result.rows[0]);
+}));
+
+app.get("/api/notificaciones", requireAuth, asyncRoute(async (req, res) => {
+  const result = await query(`SELECT id_notificacion, id_usuario, tipo, titulo, mensaje, id_planificacion,
+      leida, fecha_creacion, fecha_lectura
+    FROM notificaciones
+    WHERE id_usuario = $1 AND ($2 = '' OR leida = ($2 = 'true'))
+    ORDER BY fecha_creacion DESC`, [currentUser(req).id_usuario, req.query.leida || ""]);
+  let rows = result.rows;
+  if (["COORDINADOR", "DIRECTOR"].includes(currentUser(req).rol) && (!req.query.leida || req.query.leida === "false")) {
+    const recovery = await query(`SELECT -id_solicitud AS id_notificacion, $1::bigint AS id_usuario,
+        'RECUPERACION_CONTRASENA' AS tipo, 'Solicitud de contraseña olvidada' AS titulo,
+        'El usuario ' || correo || ' solicita asistencia para recuperar su acceso.' AS mensaje,
+        NULL::bigint AS id_planificacion, false AS leida, fecha_solicitud AS fecha_creacion,
+        NULL::timestamptz AS fecha_lectura
+      FROM solicitudes_recuperacion
+      WHERE estado = 'PENDIENTE'`, [currentUser(req).id_usuario]);
+    rows = [...rows, ...recovery.rows].sort((a, b) => new Date(b.fecha_creacion).getTime() - new Date(a.fecha_creacion).getTime());
+  }
+  res.json(rows);
+}));
+app.patch("/api/notificaciones/:id/leida", requireAuth, asyncRoute(async (req, res) => {
+  const notificationId = Number(req.params.id);
+  if (notificationId < 0) {
+    const recovery = await query(`UPDATE solicitudes_recuperacion SET estado = 'ATENDIDA', fecha_atencion = now(), id_coordinador = $1
+      WHERE id_solicitud = $2 AND estado = 'PENDIENTE' RETURNING id_solicitud`, [currentUser(req).id_usuario, Math.abs(notificationId)]);
+    if (!recovery.rowCount) throw httpError(404, "Notificación no encontrada");
+    return res.json({ id_notificacion: notificationId, leida: true });
+  }
+  const result = await query(`UPDATE notificaciones SET leida = true, fecha_lectura = now()
+    WHERE id_notificacion = $1 AND id_usuario = $2 RETURNING *`, [id(notificationId, "id_notificacion"), currentUser(req).id_usuario]);
+  if (!result.rowCount) throw httpError(404, "Notificación no encontrada");
+  res.json(result.rows[0]);
+}));
+app.patch("/api/notificaciones/marcar-todas-leidas", requireAuth, asyncRoute(async (req, res) => {
+  await query("UPDATE notificaciones SET leida = true, fecha_lectura = now() WHERE id_usuario = $1 AND leida = false", [currentUser(req).id_usuario]);
+  if (["COORDINADOR", "DIRECTOR"].includes(currentUser(req).rol)) await query("UPDATE solicitudes_recuperacion SET estado = 'ATENDIDA', fecha_atencion = now(), id_coordinador = $1 WHERE estado = 'PENDIENTE'", [currentUser(req).id_usuario]);
+  res.json({ updated: true });
 }));
 
 app.get("/api/catedraticos", requireAuth, asyncRoute(async (req, res) => {
@@ -155,7 +295,10 @@ app.post("/api/catedraticos", requireRole("COORDINADOR"), asyncRoute(async (req,
   const result = await query(`INSERT INTO catedraticos (codigo, nombre_completo, correo, telefono)
     VALUES ($1, $2, $3, $4)
     RETURNING id_catedratico, id_usuario, codigo, nombre_completo, correo, telefono, activo`, [req.body.codigo, req.body.nombre_completo, req.body.correo || null, req.body.telefono || null]);
-  res.status(201).json(result.rows[0]);
+  await provisionTeacherUsers();
+  const linked = await query(`SELECT id_catedratico, id_usuario, codigo, nombre_completo, correo, telefono, activo
+    FROM catedraticos WHERE id_catedratico = $1`, [result.rows[0].id_catedratico]);
+  res.status(201).json(linked.rows[0]);
 }));
 
 app.get("/api/catedraticos/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -183,7 +326,7 @@ app.patch("/api/catedraticos/:id/estado", requireRole("COORDINADOR"), asyncRoute
 }));
 
 app.get("/api/cursos", requireAuth, asyncRoute(async (req, res) => {
-  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.activo,
+  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.tiene_laboratorio, c.costo_laboratorio, c.activo,
       COALESCE(json_agg(json_build_object('id_ciclo', ci.id_ciclo, 'numero', ci.numero, 'nombre', ci.nombre)) FILTER (WHERE ci.id_ciclo IS NOT NULL), '[]') AS ciclos
     FROM cursos c LEFT JOIN pensum p USING (id_curso) LEFT JOIN ciclos ci USING (id_ciclo)
     WHERE (NULLIF($1, '') IS NULL OR c.nombre ILIKE '%' || $1 || '%' OR c.codigo ILIKE '%' || $1 || '%')
@@ -192,7 +335,7 @@ app.get("/api/cursos", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/cursos/ciclo/:id", requireAuth, asyncRoute(async (req, res) => {
-  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.activo
+  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.tiene_laboratorio, c.costo_laboratorio, c.activo
     FROM cursos c JOIN pensum p USING (id_curso) WHERE p.id_ciclo = $1 AND c.activo = true ORDER BY c.codigo`, [id(req.params.id, "id_ciclo")]);
   res.json(result.rows);
 }));
@@ -209,8 +352,9 @@ app.get("/api/pensum", requireAuth, asyncRoute(async (req, res) => {
 
 app.post("/api/cursos", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["codigo", "nombre"]);
+  const { tieneLaboratorio, costoLaboratorio } = courseFields(req.body);
   const result = await withTransaction(async (client) => {
-    const inserted = await client.query("INSERT INTO cursos (codigo, nombre, descripcion) VALUES ($1, $2, $3) RETURNING id_curso, codigo, nombre, descripcion, activo", [req.body.codigo, req.body.nombre, req.body.descripcion || null]);
+    const inserted = await client.query("INSERT INTO cursos (codigo, nombre, descripcion, tiene_laboratorio, costo_laboratorio) VALUES ($1, $2, $3, $4, $5) RETURNING id_curso, codigo, nombre, descripcion, tiene_laboratorio, costo_laboratorio, activo", [req.body.codigo, req.body.nombre, req.body.descripcion || null, tieneLaboratorio, costoLaboratorio]);
     if (req.body.id_ciclo) await client.query("INSERT INTO pensum (id_curso, id_ciclo) VALUES ($1, $2)", [inserted.rows[0].id_curso, id(req.body.id_ciclo, "id_ciclo")]);
     return inserted;
   });
@@ -218,7 +362,7 @@ app.post("/api/cursos", requireRole("COORDINADOR"), asyncRoute(async (req, res) 
 }));
 
 app.get("/api/cursos/:id", requireAuth, asyncRoute(async (req, res) => {
-  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.activo,
+  const result = await query(`SELECT c.id_curso, c.codigo, c.nombre, c.descripcion, c.tiene_laboratorio, c.costo_laboratorio, c.activo,
       COALESCE(json_agg(p.id_ciclo) FILTER (WHERE p.id_ciclo IS NOT NULL), '[]') AS id_ciclos
     FROM cursos c LEFT JOIN pensum p USING (id_curso) WHERE c.id_curso = $1 GROUP BY c.id_curso`, [id(req.params.id, "id_curso")]);
   if (!result.rowCount) throw httpError(404, "Curso no encontrado");
@@ -227,7 +371,8 @@ app.get("/api/cursos/:id", requireAuth, asyncRoute(async (req, res) => {
 
 app.put("/api/cursos/:id", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["codigo", "nombre"]);
-  const result = await query("UPDATE cursos SET codigo = $1, nombre = $2, descripcion = $3 WHERE id_curso = $4 RETURNING id_curso, codigo, nombre, descripcion, activo", [req.body.codigo, req.body.nombre, req.body.descripcion || null, id(req.params.id, "id_curso")]);
+  const { tieneLaboratorio, costoLaboratorio } = courseFields(req.body);
+  const result = await query("UPDATE cursos SET codigo = $1, nombre = $2, descripcion = $3, tiene_laboratorio = $4, costo_laboratorio = $5 WHERE id_curso = $6 RETURNING id_curso, codigo, nombre, descripcion, tiene_laboratorio, costo_laboratorio, activo", [req.body.codigo, req.body.nombre, req.body.descripcion || null, tieneLaboratorio, costoLaboratorio, id(req.params.id, "id_curso")]);
   if (!result.rowCount) throw httpError(404, "Curso no encontrado");
   res.json(result.rows[0]);
 }));
@@ -241,7 +386,7 @@ app.patch("/api/cursos/:id/estado", requireRole("COORDINADOR"), asyncRoute(async
 
 app.get("/api/roles", requireAuth, asyncRoute(async (_req, res) => res.json((await query("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre")).rows)));
 app.get("/api/ciclos", requireAuth, asyncRoute(async (_req, res) => res.json((await query("SELECT id_ciclo, numero, nombre, activo FROM ciclos ORDER BY numero")).rows)));
-app.get("/api/periodos", requireAuth, asyncRoute(async (_req, res) => res.json((await query("SELECT id_periodo, anio, semestre, fecha_inicio, fecha_fin, estado FROM periodos_academicos ORDER BY anio DESC, semestre DESC")).rows)));
+app.get("/api/periodos", requireAuth, asyncRoute(async (_req, res) => res.json((await query("SELECT id_periodo, anio, semestre, fecha_inicio, fecha_fin, estado FROM periodos_academicos WHERE fecha_inicio <= CURRENT_DATE ORDER BY fecha_inicio DESC")).rows)));
 app.post("/api/periodos", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["anio", "semestre", "fecha_inicio", "fecha_fin"]);
   const result = await query(`INSERT INTO periodos_academicos (anio, semestre, fecha_inicio, fecha_fin, estado)
@@ -297,7 +442,7 @@ app.get("/api/planificaciones", requireAuth, asyncRoute(async (req, res) => {
   const params = [req.query.estado || ""];
   let where = "(NULLIF($1, '') IS NULL OR pl.estado = $1)";
   if (currentUser(req).rol === "COORDINADOR") { params.push(currentUser(req).id_usuario); where += ` AND pl.id_coordinador = $${params.length}`; }
-  const result = await query(`SELECT pl.id_planificacion, pl.id_periodo, p.anio, p.semestre, pl.id_coordinador,
+    const result = await query(`SELECT pl.id_planificacion, pl.id_periodo, pl.nombre, p.anio, p.semestre, pl.id_coordinador,
       u.nombre_completo AS coordinador_nombre, pl.estado, pl.fecha_creacion, pl.fecha_envio, pl.fecha_publicacion
     FROM planificaciones pl JOIN periodos_academicos p USING (id_periodo) JOIN usuarios u ON u.id_usuario = pl.id_coordinador
     WHERE ${where} ORDER BY p.anio DESC, p.semestre DESC`, params);
@@ -305,16 +450,16 @@ app.get("/api/planificaciones", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/planificaciones", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
-  bodyRequired(req.body, ["id_periodo"]);
-  const result = await query(`INSERT INTO planificaciones (id_periodo, id_coordinador) VALUES ($1, $2)
-    RETURNING id_planificacion, id_periodo, id_coordinador, estado, fecha_creacion, fecha_envio, fecha_publicacion`, [id(req.body.id_periodo, "id_periodo"), currentUser(req).id_usuario]);
+  bodyRequired(req.body, ["id_periodo", "nombre"]);
+  const result = await query(`INSERT INTO planificaciones (id_periodo, id_coordinador, nombre) VALUES ($1, $2, $3)
+    RETURNING id_planificacion, id_periodo, nombre, id_coordinador, estado, fecha_creacion, fecha_envio, fecha_publicacion`, [id(req.body.id_periodo, "id_periodo"), currentUser(req).id_usuario, String(req.body.nombre).trim()]);
   res.status(201).json(result.rows[0]);
 }));
 
 app.get("/api/planificaciones/:id", requireAuth, asyncRoute(async (req, res) => {
   if (currentUser(req).rol === "CATEDRATICO") throw httpError(403, "Los catedráticos consultan únicamente sus cursos publicados");
   const planId = id(req.params.id, "id_planificacion");
-  const result = await query(`SELECT pl.id_planificacion, pl.id_periodo, p.anio, p.semestre, pl.id_coordinador,
+  const result = await query(`SELECT pl.id_planificacion, pl.id_periodo, pl.nombre, p.anio, p.semestre, pl.id_coordinador,
       u.nombre_completo AS coordinador_nombre, pl.estado, pl.fecha_creacion, pl.fecha_envio, pl.fecha_publicacion
     FROM planificaciones pl JOIN periodos_academicos p USING (id_periodo) JOIN usuarios u ON u.id_usuario = pl.id_coordinador
     WHERE pl.id_planificacion = $1`, [planId]);
@@ -324,20 +469,28 @@ app.get("/api/planificaciones/:id", requireAuth, asyncRoute(async (req, res) => 
 }));
 
 app.post("/api/planificaciones/:id/enviar", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
-  const result = await query(`UPDATE planificaciones SET estado = 'PENDIENTE_APROBACION', fecha_envio = now()
-    WHERE id_planificacion = $1 AND id_coordinador = $2 AND estado IN ('BORRADOR', 'RECHAZADA')
-    RETURNING id_planificacion, estado, fecha_envio`, [id(req.params.id, "id_planificacion"), currentUser(req).id_usuario]);
-  if (!result.rowCount) throw httpError(409, "La planificación no puede enviarse en su estado actual");
+  const result = await withTransaction(async (client) => {
+    const planId = id(req.params.id, "id_planificacion");
+    const updated = await client.query(`UPDATE planificaciones SET estado = 'PENDIENTE_APROBACION', fecha_envio = now()
+      WHERE id_planificacion = $1 AND id_coordinador = $2 AND estado IN ('BORRADOR', 'RECHAZADA')
+      RETURNING id_planificacion, nombre, estado, fecha_envio`, [planId, currentUser(req).id_usuario]);
+    if (!updated.rowCount) throw httpError(409, "La planificación no puede enviarse en su estado actual");
+    const directors = await client.query("SELECT u.id_usuario FROM usuarios u JOIN roles r USING (id_rol) WHERE r.nombre = 'DIRECTOR' AND u.activo = true");
+    for (const director of directors.rows) await notifyUser(client, director.id_usuario, "PLANIFICACION_ENVIADA", "Planificación pendiente de aprobación", `La planificación ${updated.rows[0].nombre} fue enviada para revisión.`, planId);
+    return updated;
+  });
   res.json(result.rows[0]);
 }));
 
 app.post("/api/planificaciones/:id/aprobar", requireRole("DIRECTOR"), asyncRoute(async (req, res) => {
   const result = await withTransaction(async (client) => {
     const planId = id(req.params.id, "id_planificacion");
-    const locked = await client.query("SELECT estado FROM planificaciones WHERE id_planificacion = $1 FOR UPDATE", [planId]);
+    const locked = await client.query("SELECT estado, id_coordinador, nombre FROM planificaciones WHERE id_planificacion = $1 FOR UPDATE", [planId]);
     if (!locked.rowCount || locked.rows[0].estado !== "PENDIENTE_APROBACION") throw httpError(409, "La planificación no está pendiente de aprobación");
     await client.query("INSERT INTO revisiones_planificacion (id_planificacion, id_director, decision, motivo_rechazo) VALUES ($1, $2, 'APROBADA', NULL)", [planId, currentUser(req).id_usuario]);
-    return client.query("UPDATE planificaciones SET estado = 'APROBADA' WHERE id_planificacion = $1 RETURNING id_planificacion, estado", [planId]);
+    const updated = await client.query("UPDATE planificaciones SET estado = 'APROBADA' WHERE id_planificacion = $1 RETURNING id_planificacion, estado", [planId]);
+    await notifyUser(client, locked.rows[0].id_coordinador, "PLANIFICACION_APROBADA", "Planificación aprobada", `La planificación ${locked.rows[0].nombre} fue aprobada por el Director.`, planId);
+    return updated;
   });
   res.json(result.rows[0]);
 }));
@@ -347,19 +500,29 @@ app.post("/api/planificaciones/:id/rechazar", requireRole("DIRECTOR"), asyncRout
   if (String(req.body.motivo_rechazo).trim().length < 5) throw httpError(400, "El motivo debe tener al menos cinco caracteres");
   const result = await withTransaction(async (client) => {
     const planId = id(req.params.id, "id_planificacion");
-    const locked = await client.query("SELECT estado FROM planificaciones WHERE id_planificacion = $1 FOR UPDATE", [planId]);
+    const locked = await client.query("SELECT estado, id_coordinador, nombre FROM planificaciones WHERE id_planificacion = $1 FOR UPDATE", [planId]);
     if (!locked.rowCount || locked.rows[0].estado !== "PENDIENTE_APROBACION") throw httpError(409, "La planificación no está pendiente de aprobación");
     await client.query("INSERT INTO revisiones_planificacion (id_planificacion, id_director, decision, motivo_rechazo) VALUES ($1, $2, 'RECHAZADA', $3)", [planId, currentUser(req).id_usuario, String(req.body.motivo_rechazo).trim()]);
-    return client.query("UPDATE planificaciones SET estado = 'RECHAZADA' WHERE id_planificacion = $1 RETURNING id_planificacion, estado", [planId]);
+    const updated = await client.query("UPDATE planificaciones SET estado = 'RECHAZADA' WHERE id_planificacion = $1 RETURNING id_planificacion, estado", [planId]);
+    await notifyUser(client, locked.rows[0].id_coordinador, "PLANIFICACION_RECHAZADA", "Planificación rechazada", `La planificación ${locked.rows[0].nombre} fue rechazada por el Director.`, planId);
+    return updated;
   });
   res.json(result.rows[0]);
 }));
 
 app.post("/api/planificaciones/:id/publicar", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
-  const result = await query(`UPDATE planificaciones SET estado = 'PUBLICADA', fecha_publicacion = now()
-    WHERE id_planificacion = $1 AND id_coordinador = $2 AND estado = 'APROBADA'
-    RETURNING id_planificacion, estado, fecha_publicacion`, [id(req.params.id, "id_planificacion"), currentUser(req).id_usuario]);
-  if (!result.rowCount) throw httpError(409, "Solo se pueden publicar planificaciones aprobadas propias");
+  const result = await withTransaction(async (client) => {
+    const planId = id(req.params.id, "id_planificacion");
+    const updated = await client.query(`UPDATE planificaciones SET estado = 'PUBLICADA', fecha_publicacion = now()
+      WHERE id_planificacion = $1 AND id_coordinador = $2 AND estado = 'APROBADA'
+      RETURNING id_planificacion, nombre, estado, fecha_publicacion`, [planId, currentUser(req).id_usuario]);
+    if (!updated.rowCount) throw httpError(409, "Solo se pueden publicar planificaciones aprobadas propias");
+    const teachers = await client.query(`SELECT DISTINCT u.id_usuario
+      FROM asignaciones a JOIN catedraticos c USING (id_catedratico) JOIN usuarios u ON u.id_usuario = c.id_usuario
+      WHERE a.id_planificacion = $1`, [planId]);
+    for (const teacher of teachers.rows) await notifyUser(client, teacher.id_usuario, "HORARIO_PUBLICADO", "Horario publicado", `El horario de la planificación ${updated.rows[0].nombre} ya está publicado.`, planId);
+    return updated;
+  });
   res.json(result.rows[0]);
 }));
 
@@ -384,7 +547,14 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
   const section = await client.query(`SELECT s.id_periodo, s.id_ciclo FROM secciones s WHERE s.id_seccion = $1`, [values[2]]);
   if (!section.rowCount || Number(section.rows[0].id_periodo) !== Number(values[3]) || Number(section.rows[0].id_ciclo) !== Number(values[1])) throw httpError(400, "La sección no pertenece al mismo período y ciclo de la asignación");
   const pensum = await client.query("SELECT 1 FROM pensum WHERE id_curso = $1 AND id_ciclo = $2", values.slice(0, 2));
-  if (!pensum.rowCount) throw httpError(400, "El curso no pertenece al ciclo indicado");
+  if (!pensum.rowCount) {
+    const course = await client.query(`SELECT c.codigo, c.nombre, COALESCE(string_agg(ci.numero::text, ', ' ORDER BY ci.numero), 'ningún ciclo') AS ciclos
+      FROM cursos c LEFT JOIN pensum p USING (id_curso) LEFT JOIN ciclos ci USING (id_ciclo)
+      WHERE c.id_curso = $1 GROUP BY c.id_curso, c.codigo, c.nombre`, [values[0]]);
+    const courseName = course.rows[0] ? `${course.rows[0].codigo} - ${course.rows[0].nombre}` : `ID ${values[0]}`;
+    const validCycles = course.rows[0]?.ciclos || "ningún ciclo";
+    throw httpError(400, `El curso ${courseName} pertenece al ciclo(s) ${validCycles}, pero se seleccionó el ciclo ${values[1]}`);
+  }
   const conflicts = await client.query(`SELECT a.id_asignacion, a.id_catedratico, a.id_salon, b.dia_semana, b.hora_inicio, b.hora_fin
     FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
     WHERE a.id_periodo = $1 AND a.id_planificacion = $2 AND ($3::bigint IS NULL OR a.id_asignacion <> $3)
@@ -404,13 +574,12 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
   }
   const days = [...new Set(bloques.map((block) => Number(block.dia_semana)))];
   for (const day of days) {
-    const load = await client.query(`SELECT count(DISTINCT a.id_curso)::integer AS total,
-        count(DISTINCT a.id_curso) FILTER (WHERE a.id_curso = $3)::integer AS same_course
+    const load = await client.query(`SELECT count(*)::integer AS total
       FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
-      WHERE a.id_periodo = $1 AND a.id_catedratico = $2 AND b.dia_semana = $4
-        AND ($5::bigint IS NULL OR a.id_asignacion <> $5)`, [values[3], teacherId, values[0], day, assignmentId]);
-    if (Number(load.rows[0].total) >= 4 && Number(load.rows[0].same_course) === 0) {
-      throw httpError(409, `El catedrático no puede superar cuatro cursos distintos el día ${day}`);
+      WHERE a.id_periodo = $1 AND a.id_catedratico = $2 AND b.dia_semana = $3
+        AND ($4::bigint IS NULL OR a.id_asignacion <> $4)`, [values[3], teacherId, day, assignmentId]);
+    if (Number(load.rows[0].total) >= 4) {
+      throw httpError(409, `El catedrático no puede superar cuatro clases el día ${day}`);
     }
   }
   return { periodo: values[3], planEstado: plan.rows[0].estado, bloques };
@@ -423,6 +592,8 @@ app.post("/api/planificaciones/:id/asignaciones", requireRole("COORDINADOR"), as
     const inserted = await client.query(`INSERT INTO asignaciones (id_planificacion, id_periodo, id_curso, id_ciclo, id_catedratico, id_seccion, id_salon)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id_asignacion`, [planId, validated.periodo, id(req.body.id_curso, "id_curso"), id(req.body.id_ciclo, "id_ciclo"), id(req.body.id_catedratico, "id_catedratico"), id(req.body.id_seccion, "id_seccion"), id(req.body.id_salon, "id_salon")]);
     for (const block of validated.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [inserted.rows[0].id_asignacion, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
+    const teacher = await client.query("SELECT u.id_usuario FROM catedraticos c JOIN usuarios u ON u.id_usuario = c.id_usuario WHERE c.id_catedratico = $1", [id(req.body.id_catedratico, "id_catedratico")]);
+    await notifyUser(client, teacher.rows[0]?.id_usuario, "ASIGNACION_DOCENTE", "Nueva asignación docente", "Se le asignó un curso en una planificación académica.", planId);
     return client.query("SELECT * FROM v_horarios WHERE id_asignacion = $1 ORDER BY dia_semana, hora_inicio", [inserted.rows[0].id_asignacion]);
   });
   res.status(201).json({ id_asignacion: result.rows[0]?.id_asignacion, bloques: result.rows });
@@ -438,6 +609,8 @@ app.put("/api/planificaciones/:id/asignaciones/:assignmentId", requireRole("COOR
     if (!updated.rowCount) throw httpError(404, "Asignación no encontrada");
     await client.query("DELETE FROM bloques_horarios WHERE id_asignacion = $1", [assignmentId]);
     for (const block of validated.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [assignmentId, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
+    const teacher = await client.query("SELECT u.id_usuario FROM catedraticos c JOIN usuarios u ON u.id_usuario = c.id_usuario WHERE c.id_catedratico = $1", [id(req.body.id_catedratico, "id_catedratico")]);
+    await notifyUser(client, teacher.rows[0]?.id_usuario, "ASIGNACION_DOCENTE", "Asignación docente actualizada", "Se actualizó una asignación de su horario.", planId);
     return client.query("SELECT * FROM v_horarios WHERE id_asignacion = $1 ORDER BY dia_semana, hora_inicio", [assignmentId]);
   });
   res.json({ id_asignacion: result.rows[0]?.id_asignacion, bloques: result.rows });
@@ -486,9 +659,13 @@ app.get("/api/mis-cursos", requireRole("CATEDRATICO"), asyncRoute(async (req, re
 }));
 
 app.get("/api/reportes/planificacion", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
-  const result = await query(`SELECT * FROM v_horarios WHERE ($1::bigint IS NULL OR id_periodo = $1)
-    AND ($2::integer IS NULL OR id_ciclo = $2) AND ($3::text IS NULL OR seccion_nombre = $3)
-    ORDER BY ciclo_numero, seccion_nombre, curso_codigo, dia_semana, hora_inicio`, [req.query.id_periodo ? id(req.query.id_periodo, "id_periodo") : null, req.query.id_ciclo ? id(req.query.id_ciclo, "id_ciclo") : null, req.query.id_seccion ? sectionName(req.query.id_seccion) : null]);
+  const result = await query(`SELECT h.*, p.nombre AS planificacion_nombre
+    FROM v_horarios h JOIN planificaciones p USING (id_planificacion)
+    WHERE ($1::bigint IS NULL OR h.id_periodo = $1)
+    AND ($2::integer IS NULL OR h.id_ciclo = $2) AND ($3::text IS NULL OR h.seccion_nombre = $3)
+    AND ($4::bigint IS NULL OR h.id_catedratico = $4) AND ($5::bigint IS NULL OR h.id_curso = $5)
+    AND ($6::integer IS NULL OR h.anio = $6) AND ($7::integer IS NULL OR h.semestre = $7)
+    ORDER BY h.anio DESC, h.semestre DESC, h.ciclo_numero, h.seccion_nombre, h.curso_codigo, h.dia_semana, h.hora_inicio`, [req.query.id_periodo ? id(req.query.id_periodo, "id_periodo") : null, req.query.id_ciclo ? id(req.query.id_ciclo, "id_ciclo") : null, req.query.id_seccion ? sectionName(req.query.id_seccion) : null, req.query.id_catedratico ? id(req.query.id_catedratico, "id_catedratico") : null, req.query.id_curso ? id(req.query.id_curso, "id_curso") : null, req.query.anio ? Number(req.query.anio) : null, req.query.semestre ? Number(req.query.semestre) : null]);
   res.json(result.rows);
 }));
 app.get("/api/reportes/planificaciones", requireRole("DIRECTOR"), asyncRoute(async (req, res) => {
@@ -501,6 +678,7 @@ app.get("/api/reportes/publicadas", requireRole("DIRECTOR", "COORDINADOR"), asyn
 app.use((error, _req, res, _next) => sendError(res, error));
 
 const server = app.listen(port, () => console.log(`API escuchando en http://localhost:${port}`));
+provisionTeacherUsers().catch((error) => console.error("No se pudieron provisionar usuarios de catedráticos:", error.message));
 const shutdown = async () => { server.close(); await pool.end(); process.exit(0); };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
