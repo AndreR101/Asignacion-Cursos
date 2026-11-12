@@ -39,6 +39,25 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const bodyRequired = (body, fields) => {
   for (const field of fields) if (body[field] === undefined || body[field] === null || body[field] === "") throw httpError(400, `Falta el campo ${field}`);
 };
+const WORKDAY_START = "07:00";
+const WORKDAY_END = "18:00";
+const CLASS_BLOCKS = new Set(["07:00-09:00", "09:00-11:00", "11:00-13:00", "14:00-16:00", "16:00-18:00"]);
+const VALID_SECTION_NAMES = new Set(["A", "B", "C", "D", "E", "F", "G"]);
+const sectionName = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!VALID_SECTION_NAMES.has(normalized)) throw httpError(400, "La sección debe ser una letra de A a G");
+  return normalized;
+};
+const validateWorkdayBlock = (block) => {
+  const start = String(block?.hora_inicio || "").slice(0, 5);
+  const end = String(block?.hora_fin || "").slice(0, 5);
+  const day = Number(block?.dia_semana);
+  if (day !== 6) throw httpError(400, "Las asignaciones de este sistema deben programarse únicamente para sábado");
+  if (!Number.isInteger(day) || day < 1 || day > 7) throw httpError(400, "El día de la semana no es válido");
+  if (!CLASS_BLOCKS.has(`${start}-${end}`)) {
+    throw httpError(400, "El horario debe utilizar un bloque institucional: 07:00-09:00, 09:00-11:00, 11:00-13:00, 14:00-16:00 o 16:00-18:00");
+  }
+};
 const currentUser = (req) => req.session.user;
 
 function requireAuth(req, res, next) {
@@ -68,6 +87,14 @@ async function databaseHealth(_req, res) {
 
 app.get("/api/health", asyncRoute(databaseHealth));
 app.get("/api/health/db", asyncRoute(databaseHealth));
+app.get("/api/periodo-actual", asyncRoute(async (_req, res) => {
+  const result = await query(`SELECT anio, semestre
+    FROM periodos_academicos
+    ORDER BY CASE WHEN anio = 2026 AND semestre = 2 THEN 0 ELSE 1 END, anio DESC, semestre DESC
+    LIMIT 1`);
+  if (!result.rowCount) return res.json({ anio: 2026, semestre: 2 });
+  res.json(result.rows[0]);
+}));
 
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["correo", "password"]);
@@ -239,14 +266,16 @@ app.get("/api/secciones", requireAuth, asyncRoute(async (req, res) => {
 }));
 app.post("/api/secciones", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["id_periodo", "id_ciclo", "nombre", "cupo_estimado"]);
+  const nombre = sectionName(req.body.nombre);
   const result = await query(`INSERT INTO secciones (id_periodo, id_ciclo, nombre, cupo_estimado)
-    VALUES ($1, $2, $3, $4) RETURNING id_seccion, id_periodo, id_ciclo, nombre, cupo_estimado, estado`, [id(req.body.id_periodo, "id_periodo"), id(req.body.id_ciclo, "id_ciclo"), req.body.nombre, Number(req.body.cupo_estimado)]);
+    VALUES ($1, $2, $3, $4) RETURNING id_seccion, id_periodo, id_ciclo, nombre, cupo_estimado, estado`, [id(req.body.id_periodo, "id_periodo"), id(req.body.id_ciclo, "id_ciclo"), nombre, Number(req.body.cupo_estimado)]);
   res.status(201).json(result.rows[0]);
 }));
 app.put("/api/secciones/:id", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
   bodyRequired(req.body, ["id_periodo", "id_ciclo", "nombre", "cupo_estimado", "estado"]);
+  const nombre = sectionName(req.body.nombre);
   const result = await query(`UPDATE secciones SET id_periodo = $1, id_ciclo = $2, nombre = $3, cupo_estimado = $4, estado = $5
-    WHERE id_seccion = $6 RETURNING id_seccion, id_periodo, id_ciclo, nombre, cupo_estimado, estado`, [id(req.body.id_periodo, "id_periodo"), id(req.body.id_ciclo, "id_ciclo"), req.body.nombre, Number(req.body.cupo_estimado), req.body.estado, id(req.params.id, "id_seccion")]);
+    WHERE id_seccion = $6 RETURNING id_seccion, id_periodo, id_ciclo, nombre, cupo_estimado, estado`, [id(req.body.id_periodo, "id_periodo"), id(req.body.id_ciclo, "id_ciclo"), nombre, Number(req.body.cupo_estimado), req.body.estado, id(req.params.id, "id_seccion")]);
   if (!result.rowCount) throw httpError(404, "Sección no encontrada");
   res.json(result.rows[0]);
 }));
@@ -334,9 +363,18 @@ app.post("/api/planificaciones/:id/publicar", requireRole("COORDINADOR"), asyncR
   res.json(result.rows[0]);
 }));
 
+function expandWeeklyBlocks(blocks) {
+  return [...new Map(blocks.map((block) => [`${block.dia_semana}|${block.hora_inicio}|${block.hora_fin}`, block])).values()];
+}
+
 async function validateAssignment(client, data, planId, assignmentId = null) {
   bodyRequired(data, ["id_curso", "id_ciclo", "id_catedratico", "id_seccion", "id_salon", "bloques"]);
   if (!Array.isArray(data.bloques) || data.bloques.length === 0) throw httpError(400, "Debe incluir al menos un bloque horario");
+  const bloques = expandWeeklyBlocks(data.bloques);
+  bloques.forEach(validateWorkdayBlock);
+  if (new Set(bloques.map((block) => Number(block.dia_semana))).size !== bloques.length) {
+    throw httpError(409, "Un curso solo puede tener una asignación por día");
+  }
   const plan = await client.query("SELECT id_periodo, estado FROM planificaciones WHERE id_planificacion = $1 FOR UPDATE", [planId]);
   if (!plan.rowCount) throw httpError(404, "Planificación no encontrada");
   if (!['BORRADOR', 'RECHAZADA'].includes(plan.rows[0].estado)) throw httpError(409, "La planificación no puede editarse en su estado actual");
@@ -351,11 +389,20 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
     FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
     WHERE a.id_periodo = $1 AND a.id_planificacion = $2 AND ($3::bigint IS NULL OR a.id_asignacion <> $3)
       AND (a.id_catedratico = $4 OR a.id_salon = $5) AND b.dia_semana = ANY($6::smallint[])
-      AND b.hora_inicio < ANY($7::time[]) AND b.hora_fin > ANY($8::time[])`, [values[3], planId, assignmentId, teacherId, id(data.id_salon, "id_salon"), data.bloques.map((b) => Number(b.dia_semana)), data.bloques.map((b) => b.hora_fin), data.bloques.map((b) => b.hora_inicio)]);
-  if (conflicts.rows.some((row) => data.bloques.some((b) => Number(b.dia_semana) === Number(row.dia_semana) && b.hora_inicio < String(row.hora_fin) && b.hora_fin > String(row.hora_inicio)))) {
+      AND b.hora_inicio < ANY($7::time[]) AND b.hora_fin > ANY($8::time[])`, [values[3], planId, assignmentId, teacherId, id(data.id_salon, "id_salon"), bloques.map((b) => Number(b.dia_semana)), bloques.map((b) => b.hora_fin), bloques.map((b) => b.hora_inicio)]);
+  if (conflicts.rows.some((row) => bloques.some((b) => Number(b.dia_semana) === Number(row.dia_semana) && b.hora_inicio < String(row.hora_fin) && b.hora_fin > String(row.hora_inicio)))) {
     throw httpError(409, "Existe un traslape de horario docente o un conflicto de salón");
   }
-  const days = [...new Set(data.bloques.map((block) => Number(block.dia_semana)))];
+  const repeatedCourse = await client.query(`SELECT a.id_asignacion
+    FROM asignaciones a JOIN bloques_horarios b USING (id_asignacion)
+    WHERE a.id_periodo = $1 AND a.id_planificacion = $2
+      AND a.id_curso = $3 AND a.id_ciclo = $4 AND a.id_seccion = $5
+      AND ($6::bigint IS NULL OR a.id_asignacion <> $6)
+      AND b.dia_semana = ANY($7::smallint[])`, [values[3], planId, values[0], values[1], values[2], assignmentId, bloques.map((block) => Number(block.dia_semana))]);
+  if (repeatedCourse.rowCount) {
+    throw httpError(409, "El curso ya está asignado a esta sección durante la jornada seleccionada");
+  }
+  const days = [...new Set(bloques.map((block) => Number(block.dia_semana)))];
   for (const day of days) {
     const load = await client.query(`SELECT count(DISTINCT a.id_curso)::integer AS total,
         count(DISTINCT a.id_curso) FILTER (WHERE a.id_curso = $3)::integer AS same_course
@@ -366,7 +413,7 @@ async function validateAssignment(client, data, planId, assignmentId = null) {
       throw httpError(409, `El catedrático no puede superar cuatro cursos distintos el día ${day}`);
     }
   }
-  return { periodo: values[3], planEstado: plan.rows[0].estado };
+  return { periodo: values[3], planEstado: plan.rows[0].estado, bloques };
 }
 
 app.post("/api/planificaciones/:id/asignaciones", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
@@ -375,7 +422,7 @@ app.post("/api/planificaciones/:id/asignaciones", requireRole("COORDINADOR"), as
     const validated = await validateAssignment(client, req.body, planId);
     const inserted = await client.query(`INSERT INTO asignaciones (id_planificacion, id_periodo, id_curso, id_ciclo, id_catedratico, id_seccion, id_salon)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id_asignacion`, [planId, validated.periodo, id(req.body.id_curso, "id_curso"), id(req.body.id_ciclo, "id_ciclo"), id(req.body.id_catedratico, "id_catedratico"), id(req.body.id_seccion, "id_seccion"), id(req.body.id_salon, "id_salon")]);
-    for (const block of req.body.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [inserted.rows[0].id_asignacion, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
+    for (const block of validated.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [inserted.rows[0].id_asignacion, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
     return client.query("SELECT * FROM v_horarios WHERE id_asignacion = $1 ORDER BY dia_semana, hora_inicio", [inserted.rows[0].id_asignacion]);
   });
   res.status(201).json({ id_asignacion: result.rows[0]?.id_asignacion, bloques: result.rows });
@@ -390,17 +437,25 @@ app.put("/api/planificaciones/:id/asignaciones/:assignmentId", requireRole("COOR
       WHERE id_asignacion = $7 AND id_planificacion = $8 RETURNING id_asignacion`, [validated.periodo, id(req.body.id_curso, "id_curso"), id(req.body.id_ciclo, "id_ciclo"), id(req.body.id_catedratico, "id_catedratico"), id(req.body.id_seccion, "id_seccion"), id(req.body.id_salon, "id_salon"), assignmentId, planId]);
     if (!updated.rowCount) throw httpError(404, "Asignación no encontrada");
     await client.query("DELETE FROM bloques_horarios WHERE id_asignacion = $1", [assignmentId]);
-    for (const block of req.body.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [assignmentId, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
+    for (const block of validated.bloques) await client.query("INSERT INTO bloques_horarios (id_asignacion, dia_semana, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4)", [assignmentId, Number(block.dia_semana), block.hora_inicio, block.hora_fin]);
     return client.query("SELECT * FROM v_horarios WHERE id_asignacion = $1 ORDER BY dia_semana, hora_inicio", [assignmentId]);
   });
   res.json({ id_asignacion: result.rows[0]?.id_asignacion, bloques: result.rows });
 }));
 
 app.delete("/api/planificaciones/:id/asignaciones/:assignmentId", requireRole("COORDINADOR"), asyncRoute(async (req, res) => {
-  const result = await query(`DELETE FROM asignaciones a USING planificaciones p
-    WHERE a.id_asignacion = $1 AND a.id_planificacion = p.id_planificacion AND p.id_planificacion = $2
-      AND p.id_coordinador = $3 AND p.estado IN ('BORRADOR', 'RECHAZADA') RETURNING a.id_asignacion`, [id(req.params.assignmentId, "id_asignacion"), id(req.params.id, "id_planificacion"), currentUser(req).id_usuario]);
-  if (!result.rowCount) throw httpError(404, "Asignación no encontrada o no editable");
+  await withTransaction(async (client) => {
+    const assignmentId = id(req.params.assignmentId, "id_asignacion");
+    const planId = id(req.params.id, "id_planificacion");
+    const owned = await client.query(`SELECT a.id_asignacion
+      FROM asignaciones a JOIN planificaciones p ON p.id_planificacion = a.id_planificacion
+      WHERE a.id_asignacion = $1 AND p.id_planificacion = $2
+        AND p.id_coordinador = $3 AND p.estado IN ('BORRADOR', 'RECHAZADA')
+      FOR UPDATE`, [assignmentId, planId, currentUser(req).id_usuario]);
+    if (!owned.rowCount) throw httpError(404, "Asignación no encontrada o no editable");
+    await client.query("DELETE FROM bloques_horarios WHERE id_asignacion = $1", [assignmentId]);
+    await client.query("DELETE FROM asignaciones WHERE id_asignacion = $1", [assignmentId]);
+  });
   res.status(204).end();
 }));
 
@@ -432,8 +487,8 @@ app.get("/api/mis-cursos", requireRole("CATEDRATICO"), asyncRoute(async (req, re
 
 app.get("/api/reportes/planificacion", requireRole("DIRECTOR", "COORDINADOR"), asyncRoute(async (req, res) => {
   const result = await query(`SELECT * FROM v_horarios WHERE ($1::bigint IS NULL OR id_periodo = $1)
-    AND ($2::integer IS NULL OR id_ciclo = $2) AND ($3::bigint IS NULL OR id_seccion = $3)
-    ORDER BY ciclo_numero, seccion_nombre, curso_codigo, dia_semana, hora_inicio`, [req.query.id_periodo ? id(req.query.id_periodo, "id_periodo") : null, req.query.id_ciclo ? id(req.query.id_ciclo, "id_ciclo") : null, req.query.id_seccion ? id(req.query.id_seccion, "id_seccion") : null]);
+    AND ($2::integer IS NULL OR id_ciclo = $2) AND ($3::text IS NULL OR seccion_nombre = $3)
+    ORDER BY ciclo_numero, seccion_nombre, curso_codigo, dia_semana, hora_inicio`, [req.query.id_periodo ? id(req.query.id_periodo, "id_periodo") : null, req.query.id_ciclo ? id(req.query.id_ciclo, "id_ciclo") : null, req.query.id_seccion ? sectionName(req.query.id_seccion) : null]);
   res.json(result.rows);
 }));
 app.get("/api/reportes/planificaciones", requireRole("DIRECTOR"), asyncRoute(async (req, res) => {

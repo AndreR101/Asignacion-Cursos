@@ -29,6 +29,8 @@ type Course = {
   code: string;
   name: string;
   cycle: number;
+  cycleIds?: number[];
+  cycleNumbers?: number[];
   description?: string;
   active: boolean;
 };
@@ -36,6 +38,13 @@ type Cycle = { id_ciclo: number; numero: number; nombre: string; activo: boolean
 type Period = { id_periodo: number; anio: number; semestre: number; fecha_inicio: string; fecha_fin: string; estado: string };
 type Section = { id_seccion: number; id_periodo: number; id_ciclo: number; nombre: string; cupo_estimado: number; estado: string; ciclo_numero?: number };
 type Room = { id_salon: number; codigo: string; descripcion?: string; capacidad: number; estado: string };
+const CLASS_BLOCKS = [
+  ["07:00", "09:00"],
+  ["09:00", "11:00"],
+  ["11:00", "13:00"],
+  ["14:00", "16:00"],
+  ["16:00", "18:00"],
+] as const;
 type Assignment = {
   id: number;
   courseId: number;
@@ -270,6 +279,12 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
+  const [currentPeriod, setCurrentPeriod] = useState("2do ciclo 2026");
+  useEffect(() => {
+    api<{ anio: number; semestre: number }>("/periodo-actual")
+      .then((period) => setCurrentPeriod(`${period.semestre === 2 ? "2do" : "1er"} ciclo ${period.anio}`))
+      .catch(() => undefined);
+  }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
@@ -304,7 +319,7 @@ function Login({ onLogin }: { onLogin: (user: ApiUser) => void }) {
           </div>
           <div className="login-period" aria-hidden="true">
             <span>PERÍODO ACADÉMICO</span>
-            <strong>Período local</strong>
+            <strong>{currentPeriod}</strong>
             <p>Consulte los períodos disponibles al iniciar sesión</p>
           </div>
           <small className="visual-foot">Planificación académica · UMG</small>
@@ -406,6 +421,8 @@ function App() {
   const mapCourse = (item: any): Course => ({
     id: Number(item.id_curso), code: item.codigo || item.curso_codigo,
     name: item.nombre || item.curso_nombre, cycle: Number(item.ciclos?.[0]?.numero || item.ciclo_numero || 1),
+    cycleIds: item.ciclos?.map((cycle: any) => Number(cycle.id_ciclo)).filter(Boolean),
+    cycleNumbers: item.ciclos?.map((cycle: any) => Number(cycle.numero)).filter(Boolean),
     description: item.descripcion, active: item.activo ?? true,
   });
   const mapPlan = (item: any): Plan => {
@@ -440,7 +457,7 @@ function App() {
   useEffect(() => {
     if (!role) return;
     setLoading(true);
-    Promise.all([api<any[]>("/catedraticos"), api<any[]>("/cursos"), api<any[]>("/planificaciones"), api<Period[]>("/periodos"), api<Cycle[]>("/ciclos"), api<Section[]>("/secciones"), api<Room[]>("/salones")])
+    Promise.all([api<any[]>("/catedraticos"), api<any[]>("/cursos"), api<any[]>(role === "teacher" ? "/mi-horario" : "/planificaciones"), api<Period[]>("/periodos"), api<Cycle[]>("/ciclos"), api<Section[]>("/secciones"), api<Room[]>("/salones")])
       .then(async ([teacherRows, courseRows, initialPlanRows, periodRows, cycleRows, sectionRows, roomRows]) => {
         setTeachers(teacherRows.map(mapTeacher));
         setCourses(courseRows.map(mapCourse));
@@ -448,6 +465,37 @@ function App() {
         setCycles(cycleRows);
         setSections(sectionRows);
         setRooms(roomRows);
+        if (role === "teacher") {
+          const rows = initialPlanRows;
+          const first = rows[0];
+          const teacherPlan: Plan = {
+            id: -1,
+            periodId: first ? Number(first.id_periodo) : undefined,
+            year: first ? Number(first.anio) : new Date().getFullYear(),
+            semester: first && Number(first.semestre) === 1 ? "Primer semestre" : "Segundo semestre",
+            sent: "",
+            coordinator: "",
+            status: "Aprobada",
+            published: true,
+            assignments: rows.map((row) => ({
+              id: Number(row.id_asignacion) * 10 + Number(row.dia_semana),
+              courseId: Number(row.id_curso),
+              teacherId: Number(row.id_catedratico),
+              cycle: Number(row.ciclo_numero),
+              cycleId: Number(row.id_ciclo),
+              sectionId: Number(row.id_seccion),
+              roomId: Number(row.id_salon),
+              periodId: Number(row.id_periodo),
+              section: row.seccion_nombre,
+              room: row.salon_codigo,
+              day: ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"][Number(row.dia_semana)],
+              start: String(row.hora_inicio).slice(0, 5),
+              end: String(row.hora_fin).slice(0, 5),
+            })),
+          };
+          setPlans(rows.length ? [teacherPlan] : []);
+          return;
+        }
         let planRows = initialPlanRows;
         if (role === "coordinator" && planRows.length === 0 && periodRows.length > 0) {
           await apiJson("/planificaciones", { id_periodo: periodRows[0].id_periodo });
@@ -473,6 +521,17 @@ function App() {
   };
   const sendPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/enviar`, {}); };
   const publishPlan = async (plan: Plan) => { await apiJson(`/planificaciones/${plan.id}/publicar`, {}); };
+  const createPlan = async () => {
+    const availablePeriod = periods.find((period) => !plans.some((plan) => Number(plan.periodId) === Number(period.id_periodo)));
+    if (!availablePeriod) {
+      const rejectedPlan = plans.find((plan) => plan.status === "Rechazada");
+      if (rejectedPlan) return rejectedPlan;
+      throw new Error("No hay períodos disponibles sin planificación");
+    }
+    const created = await apiJson<any>("/planificaciones", { id_periodo: availablePeriod.id_periodo });
+    const detail = await api<any>(`/planificaciones/${created.id_planificacion}`);
+    return mapPlan(detail);
+  };
   const decidePlan = async (plan: Plan, decision: "approve" | "reject", reason?: string) => {
     await apiJson(`/planificaciones/${plan.id}/${decision === "approve" ? "aprobar" : "rechazar"}`, decision === "approve" ? {} : { motivo_rechazo: reason });
   };
@@ -486,11 +545,10 @@ function App() {
     const room = rooms.find((item) => Number(item.id_salon) === assignment.roomId || item.codigo === assignment.room);
     const cycle = cycles.find((item) => Number(item.id_ciclo) === assignment.cycleId || Number(item.numero) === assignment.cycle);
     if (!section || !room || !cycle || !plan.periodId) throw new Error("No se encontró el período, sección, ciclo o salón seleccionado");
-    const days = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
     const payload = {
       id_periodo: plan.periodId, id_curso: assignment.courseId, id_ciclo: cycle.id_ciclo,
       id_catedratico: assignment.teacherId, id_seccion: section.id_seccion, id_salon: room.id_salon,
-      bloques: [{ dia_semana: Math.max(1, days.indexOf(assignment.day)), hora_inicio: assignment.start, hora_fin: assignment.end }],
+      bloques: [{ dia_semana: 6, hora_inicio: assignment.start, hora_fin: assignment.end }],
     };
     const result = await apiJson<any>(assignment.id ? `/planificaciones/${plan.id}/asignaciones/${assignment.id}` : `/planificaciones/${plan.id}/asignaciones`, payload, assignment.id ? "PUT" : "POST");
     return { ...assignment, id: Number(result.id_asignacion || assignment.id || Date.now()), sectionId: Number(section.id_seccion), roomId: Number(room.id_salon), periodId: Number(plan.periodId), cycleId: Number(cycle.id_ciclo) };
@@ -655,6 +713,7 @@ function App() {
               onPublish={publishPlan}
               onAssignmentSave={persistAssignment}
               onAssignmentRemove={removeAssignment}
+              onCreatePlan={role === "coordinator" ? createPlan : undefined}
               cycles={cycles}
               periods={periods}
               sections={sections}
@@ -680,6 +739,7 @@ function App() {
             <Schedule
               assignments={activePlan.assignments.filter((a) => !currentTeacherId || a.teacherId === currentTeacherId)}
               courses={courses}
+              sectionCatalog={sections.filter((section) => Number(section.id_periodo) === Number(activePlan.periodId))}
               compact={false}
             />
           )}
@@ -1338,6 +1398,7 @@ function Planning({
   onPublish,
   onAssignmentSave,
   onAssignmentRemove,
+  onCreatePlan,
   cycles,
   periods,
   sections,
@@ -1353,6 +1414,7 @@ function Planning({
   onPublish?: (plan: Plan) => Promise<void>;
   onAssignmentSave?: (plan: Plan, assignment: Assignment) => Promise<Assignment>;
   onAssignmentRemove?: (plan: Plan, assignment: Assignment) => Promise<void>;
+  onCreatePlan?: () => Promise<Plan>;
   cycles: Cycle[];
   periods: Period[];
   sections: Section[];
@@ -1360,6 +1422,7 @@ function Planning({
   onSectionCreate?: (plan: Plan, name: string, capacity: number, cycleId: number) => Promise<void>;
 }) {
   const [planId, setPlanId] = useState(plans[0]?.id || 0);
+  const [statusFilter, setStatusFilter] = useState("");
   const [cycleFilter, setCycleFilter] = useState("");
   const [sectionFilter, setSectionFilter] = useState("");
   const plan = plans.find((p) => p.id === planId) || plans[0];
@@ -1379,6 +1442,10 @@ function Planning({
   const editable = plan.status === "Borrador" || plan.status === "Rechazada";
   const planSections = sections.filter((section) => Number(section.id_periodo) === Number(plan.periodId));
   const filteredSections = planSections.filter((section) => !cycleFilter || Number(section.id_ciclo) === Number(cycleFilter));
+  const sectionNames = [...new Set(filteredSections.filter((section) => section.estado === "ACTIVA").map((section) => section.nombre))].sort();
+  const planningYears = [...new Set(plans.map((item) => item.year))].sort((a, b) => b - a);
+  const planningSemesters = [...new Set(plans.map((item) => item.semester))];
+  const planningStatuses = [...new Set(plans.map((item) => item.status))];
   const visibleAssignments = plan.assignments.filter((assignment) =>
     (!cycleFilter || assignment.cycleId === Number(cycleFilter) || assignment.cycle === Number(cycleFilter)) &&
     (!sectionFilter || assignment.sectionId === Number(sectionFilter) || assignment.section === sectionFilter),
@@ -1408,6 +1475,20 @@ function Planning({
           <p>Organice la oferta académica por ciclo, sección y bloque semanal.</p>
         </div>
         <div className="page-actions">
+          {onCreatePlan && (
+            <Button variant="secondary" icon="plus" onClick={() => {
+              void onCreatePlan().then((newPlan) => {
+                setPlans([...plans, newPlan]);
+                setPlanId(newPlan.id);
+                setStatusFilter(newPlan.status);
+                setCycleFilter("");
+                setSectionFilter("");
+                notify(newPlan.status === "Rechazada" ? "Planificación rechazada abierta para corrección" : "Nueva planificación creada como borrador");
+              }).catch((error) => notify(error.message));
+            }}>
+              Nueva planificación
+            </Button>
+          )}
           {editable && (
             <>
               <Button variant="secondary" onClick={() => notify("Borrador guardado correctamente")}>
@@ -1423,29 +1504,29 @@ function Planning({
         </div>
       </div>
       <section className="panel filter-bar">
-        <Field label="Planificación">
-          <select value={planId} onChange={(e) => setPlanId(+e.target.value)}>
-            {plans.map((p) => (
-                <option value={p.id} key={p.id}>
-                  {p.semester} {p.year} · {p.status}
-                </option>
-              ))}
+        <Field label="Estado">
+          <select value={statusFilter || plan.status} onChange={(e) => {
+            setStatusFilter(e.target.value);
+            const nextPlan = plans.find((item) => item.status === e.target.value);
+            if (nextPlan) setPlanId(nextPlan.id);
+          }}>
+            {planningStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
           </select>
         </Field>
         <Field label="Año">
-          <select value={plan.periodId || ""} onChange={(e) => {
-            const nextPlan = plans.find((item) => item.periodId === Number(e.target.value));
-            if (nextPlan) setPlanId(nextPlan.id);
+          <select value={plan.year || ""} onChange={(e) => {
+            const nextPlan = plans.find((item) => item.year === Number(e.target.value));
+            if (nextPlan) { setPlanId(nextPlan.id); setStatusFilter(nextPlan.status); }
           }}>
-            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.anio}</option>)}
+            {planningYears.map((year) => <option key={year} value={year}>{year}</option>)}
           </select>
         </Field>
         <Field label="Semestre">
-          <select value={plan.periodId || ""} onChange={(e) => {
-            const nextPlan = plans.find((item) => item.periodId === Number(e.target.value));
-            if (nextPlan) setPlanId(nextPlan.id);
+          <select value={plan.semester} onChange={(e) => {
+            const nextPlan = plans.find((item) => item.year === plan.year && item.semester === e.target.value);
+            if (nextPlan) { setPlanId(nextPlan.id); setStatusFilter(nextPlan.status); }
           }}>
-            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.semestre === 1 ? "Primero" : "Segundo"} · {period.anio}</option>)}
+            {planningSemesters.map((semester) => <option key={semester} value={semester}>{semester === "Primer semestre" ? "Primero" : "Segundo"}</option>)}
           </select>
         </Field>
         <Field label="Ciclo">
@@ -1456,10 +1537,16 @@ function Planning({
         </Field>
         <Field label="Sección">
           <select value={sectionFilter} onChange={(e) => setSectionFilter(e.target.value)}>
-            <option>Todas</option>
-            {filteredSections.filter((section) => section.estado === "ACTIVA").map((section) => <option value={section.id_seccion} key={section.id_seccion}>{section.nombre}</option>)}
+            <option value="">Todas</option>
+            {sectionNames.map((name) => <option value={name} key={name}>{name}</option>)}
           </select>
         </Field>
+        <Button variant="secondary" onClick={() => {
+          setStatusFilter("");
+          setCycleFilter("");
+          setSectionFilter("");
+          if (plans[0]) setPlanId(plans[0].id);
+        }}>Limpiar filtros</Button>
         <div className="status-field">
           <span>Estado</span>
           <Badge status={plan.status} />
@@ -1568,6 +1655,7 @@ function Planning({
           assignments={visibleAssignments}
           courses={courses}
           teachers={teachers}
+          sectionCatalog={planSections}
           onEdit={editable ? (a) => setModal(a) : undefined}
         />
       </section>
@@ -1661,12 +1749,17 @@ function AssignmentModal({
       sectionId: sections[0]?.id_seccion,
       room: rooms[0]?.codigo || "",
       roomId: rooms[0]?.id_salon,
-      day: "Lunes",
+      day: "Sábado",
       start: "07:00",
-      end: "08:30",
+      end: "09:00",
     },
   );
   const [error, setError] = useState("");
+  const selectedCycleId = form.cycleId || cycles.find((cycle) => cycle.numero === form.cycle)?.id_ciclo;
+  const coursesForCycle = courses.filter((course) => course.active && (
+    course.cycleIds?.includes(Number(selectedCycleId)) || course.cycleNumbers?.includes(Number(form.cycle)) || course.cycle === form.cycle
+  ));
+  const sectionsForCycle = sections.filter((section) => Number(section.id_ciclo) === Number(selectedCycleId) && section.estado === "ACTIVA");
   function submit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -1707,7 +1800,7 @@ function AssignmentModal({
       );
     if (form.start >= form.end)
       return setError("La hora de fin debe ser posterior a la hora de inicio");
-    onSave({ ...form, cycle: courses.find((c) => c.id === form.courseId)?.cycle || form.cycle });
+    onSave({ ...form, day: "Sábado", cycle: courses.find((c) => c.id === form.courseId)?.cycle || form.cycle });
   }
   return (
     <Modal
@@ -1733,7 +1826,15 @@ function AssignmentModal({
             <Field label="Ciclo">
               <select
                 value={form.cycle}
-                onChange={(e) => setForm({ ...form, cycle: +e.target.value })}
+                onChange={(e) => {
+                  const cycleNumber = +e.target.value;
+                  const cycle = cycles.find((item) => item.numero === cycleNumber);
+                  const firstCourse = courses.find((course) => course.active && (
+                    course.cycleIds?.includes(Number(cycle?.id_ciclo)) || course.cycleNumbers?.includes(cycleNumber) || course.cycle === cycleNumber
+                  ));
+                  const firstSection = sections.find((section) => Number(section.id_ciclo) === Number(cycle?.id_ciclo) && section.estado === "ACTIVA");
+                  setForm({ ...form, cycle: cycleNumber, cycleId: cycle?.id_ciclo, courseId: firstCourse?.id || 0, section: firstSection?.nombre || "", sectionId: firstSection?.id_seccion });
+                }}
               >
                 {cycles.filter((cycle) => cycle.activo).map((cycle) => (
                   <option value={cycle.numero} key={cycle.id_ciclo}>
@@ -1750,7 +1851,7 @@ function AssignmentModal({
                   setForm({ ...form, section: e.target.value, sectionId: selected?.id_seccion });
                 }}
               >
-                {sections.filter((section) => Number(section.id_ciclo) === (form.cycleId || form.cycle) && section.estado === "ACTIVA").map((section) => (
+                {sectionsForCycle.map((section) => (
                   <option value={section.nombre} key={section.id_seccion}>{section.nombre}</option>
                 ))}
               </select>
@@ -1759,14 +1860,13 @@ function AssignmentModal({
               <select
                 value={form.courseId}
                 onChange={(e) => {
-                  const c = courses.find((x) => x.id === +e.target.value);
-                  const cycle = cycles.find((item) => item.numero === (c?.cycle || 0));
-                  setForm({ ...form, courseId: +e.target.value, cycle: c?.cycle || 0, cycleId: cycle?.id_ciclo });
+                  const courseId = +e.target.value;
+                  const selectedCourse = coursesForCycle.find((course) => course.id === courseId);
+                  const selectedCycle = cycles.find((cycle) => Number(cycle.id_ciclo) === Number(selectedCycleId));
+                  setForm({ ...form, courseId, cycle: selectedCycle?.numero || selectedCourse?.cycle || 0, cycleId: selectedCycle?.id_ciclo || selectedCycleId });
                 }}
               >
-                {courses
-                  .filter((c) => c.active)
-                  .map((c) => (
+                {coursesForCycle.map((c) => (
                     <option value={c.id} key={c.id}>
                       {c.code} · {c.name}
                     </option>
@@ -1801,25 +1901,20 @@ function AssignmentModal({
               </select>
             </Field>
             <Field label="Día">
-              <select value={form.day} onChange={(e) => setForm({ ...form, day: e.target.value })}>
-                {["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"].map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
+              <select value="Sábado" disabled>
+                <option>Sábado</option>
               </select>
             </Field>
             <Field label="Hora de inicio">
-              <input
-                type="time"
-                value={form.start}
-                onChange={(e) => setForm({ ...form, start: e.target.value })}
-              />
-            </Field>
-            <Field label="Hora de fin">
-              <input
-                type="time"
-                value={form.end}
-                onChange={(e) => setForm({ ...form, end: e.target.value })}
-              />
+              <select
+                value={`${form.start}-${form.end}`}
+                onChange={(e) => {
+                  const [start, end] = e.target.value.split("-");
+                  setForm({ ...form, start, end });
+                }}
+              >
+                {CLASS_BLOCKS.map(([start, end]) => <option key={`${start}-${end}`} value={`${start}-${end}`}>{start} a {end}</option>)}
+              </select>
             </Field>
           </div>
         </div>
@@ -1841,7 +1936,7 @@ function AssignmentModal({
 }
 
 function SectionModal({ onClose, notify, cycles, onCreate }: { onClose: () => void; notify: (s: string) => void; cycles: Cycle[]; onCreate?: (name: string, capacity: number, cycleId: number) => Promise<void> }) {
-  const [section, setSection] = useState("C");
+  const [section, setSection] = useState("A");
   const [capacity, setCapacity] = useState("35");
   const [cycleId, setCycleId] = useState(cycles[0]?.id_ciclo || 0);
   const [error, setError] = useState("");
@@ -1872,11 +1967,12 @@ function SectionModal({ onClose, notify, cycles, onCreate }: { onClose: () => vo
             </select>
           </Field>
           <Field label="Identificador de sección">
-            <input
+            <select
               value={section}
               onChange={(e) => setSection(e.target.value.toUpperCase())}
-              maxLength={2}
-            />
+            >
+              {["A", "B", "C", "D", "E", "F", "G"].map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
           </Field>
           <Field label="Cupo estimado" wide>
             <input
@@ -1904,29 +2000,35 @@ function Schedule({
   assignments,
   courses,
   teachers = [],
+  sectionCatalog = [],
   compact = false,
   onEdit,
 }: {
   assignments: Assignment[];
   courses: Course[];
   teachers?: Teacher[];
+  sectionCatalog?: Section[];
   compact?: boolean;
   onEdit?: (a: Assignment) => void;
 }) {
-  const days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
-  const slots = compact
-    ? ["07:00", "08:30", "10:00", "13:00"]
-    : ["07:00", "08:30", "10:00", "11:30", "13:00", "14:30"];
+  const slots = ["07:00", "09:00", "11:00", "14:00", "16:00"];
+  const sectionKeys = [...new Set(assignments.map((assignment) => `${assignment.cycleId || assignment.cycle}|${assignment.sectionId || assignment.section}`))].slice(0, 4);
+  const columns = sectionKeys.map((key) => {
+    const assignment = assignments.find((item) => `${item.cycleId || item.cycle}|${item.sectionId || item.section}` === key)!;
+    const section = sectionCatalog.find((item) => Number(item.id_seccion) === Number(assignment.sectionId));
+    return { key, label: `Ciclo ${assignment.cycle} · Sección ${assignment.section}`, capacity: section?.cupo_estimado };
+  });
   return (
     <div className={`schedule-wrap ${compact ? "compact" : ""}`}>
       <div
         className="schedule-grid"
-        style={{ gridTemplateColumns: `76px repeat(5, minmax(145px, 1fr))` }}
+        style={{ gridTemplateColumns: `76px repeat(${Math.max(columns.length, 1)}, minmax(220px, 1fr))` }}
       >
         <div className="schedule-corner">Hora</div>
-        {days.map((d) => (
-          <div className="schedule-day" key={d}>
-            {d}
+        {columns.map((column) => (
+          <div className="schedule-day" key={column.key}>
+            <strong>{column.label}</strong>
+            {column.capacity ? <small>Cupo: {column.capacity}</small> : null}
           </div>
         ))}
         {slots.map((time) => (
@@ -1934,11 +2036,11 @@ function Schedule({
             <div className="time-cell" key={time}>
               {time}
             </div>
-            {days.map((day) => {
-              const a = assignments.find((x) => x.day === day && x.start === time);
+            {columns.map((column) => {
+              const a = assignments.find((x) => `${x.cycleId || x.cycle}|${x.sectionId || x.section}` === column.key && x.start === time);
               const c = a && courses.find((x) => x.id === a.courseId);
               return (
-                <div className="schedule-cell" key={day + time}>
+                <div className="schedule-cell" key={column.key + time}>
                   {a && (
                     <button className={`class-block c${a.cycle % 4}`} onClick={() => onEdit?.(a)}>
                       <strong>{c?.code}</strong>
@@ -2315,6 +2417,9 @@ function Reports({
     (!sectionId || assignment.sectionId === Number(sectionId) || assignment.section === sectionId),
   );
   const reportSections = sections.filter((section) => !periodId || Number(section.id_periodo) === Number(periodId));
+  const reportSectionNames = [...new Set(reportSections.map((section) => section.nombre))].sort();
+  const reportYears = [...new Set(periods.map((period) => period.anio))].sort((a, b) => b - a);
+  const reportSemesters = [...new Set(periods.map((period) => period.semestre))].sort();
   return (
     <div className="page-stack">
       <div className="page-title">
@@ -2338,13 +2443,19 @@ function Reports({
       </div>
       <section className="panel report-filters">
         <Field label="Año">
-          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.anio}</option>)}
+          <select value={selectedPeriod?.anio || ""} onChange={(e) => {
+            const next = periods.filter((period) => Number(period.anio) === Number(e.target.value)).sort((a, b) => b.semestre - a.semestre)[0];
+            if (next) setPeriodId(String(next.id_periodo));
+          }}>
+            {reportYears.map((year) => <option key={year} value={year}>{year}</option>)}
           </select>
         </Field>
         <Field label="Semestre">
-          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-            {periods.map((period) => <option key={period.id_periodo} value={period.id_periodo}>{period.semestre === 1 ? "Primero" : "Segundo"} · {period.anio}</option>)}
+          <select value={selectedPeriod?.semestre || ""} onChange={(e) => {
+            const next = periods.find((period) => Number(period.anio) === Number(selectedPeriod?.anio) && Number(period.semestre) === Number(e.target.value));
+            if (next) setPeriodId(String(next.id_periodo));
+          }}>
+            {reportSemesters.map((semester) => <option key={semester} value={semester}>{semester === 1 ? "Primero" : "Segundo"}</option>)}
           </select>
         </Field>
         <Field label="Ciclo">
@@ -2355,8 +2466,8 @@ function Reports({
         </Field>
         <Field label="Sección">
           <select value={sectionId} onChange={(e) => setSectionId(e.target.value)}>
-            <option>Todas</option>
-            {reportSections.filter((section) => !cycleId || Number(section.id_ciclo) === Number(cycleId)).map((section) => <option key={section.id_seccion} value={section.id_seccion}>{section.nombre}</option>)}
+            <option value="">Todas</option>
+            {reportSectionNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </Field>
         <Button onClick={() => void onQuery({ periodId, cycleId, sectionId }).then((result) => {
